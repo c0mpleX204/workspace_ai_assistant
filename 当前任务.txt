@@ -1,0 +1,1060 @@
+第1段 2小时：系统人设注入（对应 D3）
+10分钟：明确人设规则（朋友感、鼓励式、简洁表达）和禁忌（不说教、不过度冗长）
+90分钟：把系统提示词注入聊天主链路，支持统一模板
+20分钟：测 5 组对话，看语气是否稳定
+产出：可复用的人设模板 + 通过的示例对话
+第2段 2小时：会话ID与多轮记忆（对应 D4）
+10分钟：定义会话数据结构（session_id、历史轮数、时间戳）
+90分钟：实现按会话保存最近 N 轮历史，支持连续提问
+20分钟：做 10 轮连续对话压测，检查是否串会话
+产出：会话连续能力 + 可配置 N 轮历史
+第3段 2小时：基础日志与异常兜底（对应 D5）
+10分钟：确定日志字段（耗时、状态、错误原因、会话ID）
+90分钟：加日志埋点 + 超时/接口失败兜底回复
+20分钟：构造 3 类失败场景（超时、API错误、空响应）回归测试
+产出：可读日志 + 用户可理解的错误提示
+
+D3 人设注入（先做）
+目标：每次回复都保持固定风格，不靠运气。
+
+改动位置：
+
+config.py
+server.py
+为什么这样改：
+
+人设文本放在配置里，后续你改语气不需要动业务代码。
+在接口层统一注入 system 消息，避免前端忘传导致风格漂移。
+建议语法（你可直接照抄思路）：
+
+在 config.py 的 Settings 里新增一个字段：
+persona_system_prompt: str = (
+"你是校园学习伙伴。语气朋友感、鼓励、简洁。"
+"回答控制在 3 到 6 句，先给结论再给行动建议。"
+"不说教，不阴阳怪气，不输出空泛鸡汤。"
+)
+
+在 server.py 增加一个辅助函数：
+def inject_system_prompt(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+has_system = any(m.get("role") == "system" for m in messages)
+if has_system:
+return messages
+return [{"role": "system", "content": settings.persona_system_prompt}] + messages
+
+然后在 chat 接口里，调用 generate_reply 前先做：
+raw_messages = [m.model_dump() for m in payload.messages]
+final_messages = inject_system_prompt(raw_messages)
+result = generate_reply(final_messages)
+
+语法重点：
+
+any(...) 是“存在性判断”。
+列表前插最简单是 [新元素] + 原列表。
+model_dump() 是 Pydantic V2 的对象转字典方法。
+D4 会话连续（第二步）
+目标：同一个 session_id 能记住上下文，不同 session 不串台。
+
+改动位置：
+
+server.py
+config.py
+为什么这样改：
+
+你当前接口每次都只看本轮 messages，没有“服务器端会话记忆”。
+用内存字典先做 MVP，后面再换 Redis/SQLite 很平滑。
+建议语法：
+
+在 config.py 增加：
+history_max_rounds: int = int(os.getenv("HISTORY_MAX_ROUNDS", "6"))
+
+在 server.py 的 ChatRequest 增加字段：
+class ChatRequest(BaseModel):
+session_id: str = "default"
+messages: List[ChatMessage] = Field(min_length=1)
+
+在 server.py 顶部定义内存存储：
+SESSION_STORE: Dict[str, List[Dict[str, str]]] = {}
+
+在 chat 里拼接历史：
+session_id = payload.session_id
+history = SESSION_STORE.get(session_id, [])
+
+语法重点：
+
+Dict[str, List[...]] 是类型标注，便于你后期维护。
+get(key, []) 可以避免 key 不存在时报错。
+切片 [-max_messages:] 是“只保留最近 N 条”。
+D5 日志与兜底（第三步）
+目标：失败可读、定位快、用户体验不崩。
+
+改动位置：
+
+server.py
+utils.py
+为什么这样改：
+
+现在错误全抛 detail，用户看不懂。
+你需要区分限流、超时、网络断开，给出不同中文提示。
+建议语法：
+
+在 server.py 引入 logging 和 time：
+import logging
+import time
+
+在 chat 里记录耗时并分类错误：
+start = time.time()
+try:
+...
+latency_ms = int((time.time() - start) * 1000)
+logger.info(f"chat ok session={session_id} model={settings.remote_primary_model} latency={latency_ms}ms")
+return ChatResponse(**result)
+except Exception as exc:
+msg = str(exc)
+latency_ms = int((time.time() - start) * 1000)
+
+语法重点：
+
+str(exc) 把异常转字符串便于关键词判断。
+if/elif 做错误类型分流。
+logger.info/error 记录结构化关键信息。
+你可以顺手修的两个告警（非必须）
+在 server.py：
+
+Field(min_items=1) 改成 Field(min_length=1)。
+startup 事件后续可迁移到 lifespan（不影响你今晚交付，可放后面）。
+你现在就按这个顺序动手
+
+先做 D3（人设注入）。
+再做 D4（session_id + 最近 N 轮）。
+最后做 D5（日志 + 友好错误）。
+你改完后把 server.py 和 config.py 最新内容贴我，我按“是否达成 D3-D5 验收标准”给你逐条过一遍。
+
+第二周 D2 的核心是：把“文件内容转成标准文本块”这一步打通，先别急着做向量化和复杂检索。
+
+基于你当前代码，最顺的开展方式是：
+
+先复用已有数据层，不重造轮子
+你已经有文档和分片入库函数：
+repo.py:18 的 create_document
+repo.py:31 的 insert_chunks
+这说明 D2 只要解决“解析 txt/pdf 并产出 chunks”即可。
+
+在服务层新增上传解析入口
+当前服务只有健康检查和聊天：
+server.py:82
+server.py:117
+建议新增一个资料入口（例如 /materials/upload），流程是：
+接收文件 -> 判断后缀 -> 调解析器 -> 生成 chunks -> 调用 create_document + insert_chunks 入库 -> 返回文档ID与分片数。
+
+解析器先做统一输出结构
+建议先统一成这种逻辑结构（不一定要新建模型类，字典也行）：
+chunk_index, content, token_count, page_no, tags
+这和 repo.py:33 的入库字段完全对齐，后续 D3 切片策略升级时不用改数据库接口。
+
+两小时可执行节奏（今天就能落地）
+
+0-20 分钟：补依赖与目录约定
+在 requirements.txt 增加 pdf 解析库（推荐 pypdf）。
+约定上传目录如 data/uploads。
+
+20-55 分钟：实现 txt 解析
+按行或按段落读取；做编码兜底（utf-8 失败再 gbk）。
+先按固定字符数切块（例如 500-800 字），page_no 置空。
+
+55-90 分钟：实现 pdf 解析
+逐页提取文本，空页跳过。
+每页再按固定字符数切块，page_no 记录页码。
+
+90-120 分钟：接入接口并冒烟测试
+上传一个 txt 和一个 pdf，检查是否都能返回 chunk 数量并写库成功。
+
+D2 的验收标准建议（最小可用）
+
+支持 txt/pdf 上传后解析成功。
+
+能在数据库看到 documents 与 chunks 新记录。
+
+返回结果包含：document_id、file_type、chunk_count。
+
+对异常有可读错误（不支持格式、空文件、解析失败）。
+
+你现在这个项目里有两个优先处理的小风险，建议并行修一下：
+
+requirements.txt 里混入了 PowerShell 命令内容，安装依赖会出问题，建议清理成纯依赖列表。
+config.py:6 里有硬编码密钥，建议改为只读环境变量，避免泄露和后续协作风险
+
+
+
+今天开始按“你执行、我派工+验收”模式走，只做任务指令，不给你写代码。
+
+今晚2小时作战单（第2周 D3）
+
+先做一次“现状盘点”（15分钟）
+确认你现在已经稳定完成：上传 PDF -> 解析 -> chunks 入库。
+记录3个数字：单文档 chunk 数、平均 chunk 长度、最大 chunk 长度。
+验收：你能说清楚“当前数据质量是否适合做向量化”（比如是否太碎或太长）。
+定义“向量化标准”（20分钟）
+决定 embedding 模型（先用一个稳定、便宜的）。
+决定向量维度和存储格式（数组/JSON/向量字段）。
+决定批处理大小（例如每批 16/32/64）和失败重试策略。
+验收：写出一页简短规则，后续都按这个规则执行，不再临时改。
+打通“chunks -> embeddings -> 入库”链路（60分钟）
+只做增量处理：只给没有 embedding 的 chunks 生成向量。
+每批处理后立刻落库，避免中途失败全丢。
+打日志：开始时间、处理条数、成功条数、失败条数、耗时。
+验收：至少完成 1 份 PDF 的全量向量化，并能查到每个 chunk 都有 embedding。
+做一次质量抽检（15分钟）
+随机抽 10 条 chunk，人工看“文本是否有语义完整性”。
+再抽 10 条 embedding，确认维度一致、无空值、无异常值。
+验收：通过率 >= 90%，否则回去调 chunk 策略（长度/overlap）。
+收尾记录（10分钟）
+写今天日报：完成项、阻塞项、明天第一件事。
+给自己留 3 个明天可直接执行的 TODO（每个 30-60 分钟）。
+你现在立刻开干的第一步
+
+先回我这3个数：chunk 总数、平均长度、最长长度。
+再回我你选的 embedding 模型名。
+我下一条消息就给你“明天第2周 D4（检索接口）”的派工单。
+
+
+插入位置 A：在 server.py:120 的 inject_system_prompt 后面、server.py:128 的 ChatResponse 前面
+要新增函数：
+
+get_latest_user_query(messages) -> str
+
+retrieve_chunks_for_chat(query, document_id=None, top_k=3, candidate_limit=500) -> List[Dict]
+
+build_retrieval_context(chunks) -> str
+
+[inject_retrieval_as_system(messages, context_text) -> List[Dict[str, str]]](http://vscodecontentref/7)
+
+插入位置 B：修改 server.py:191 的 chat 函数内部流程
+要插入调用点：
+
+在 server.py:199 后，调用 get_latest_user_query
+
+在上一步后，调用 retrieve_chunks_for_chat
+
+在上一步后，调用 build_retrieval_context
+
+在 server.py:200 前，把检索上下文通过 inject_retrieval_as_system 注入，再走原来的 inject_system_prompt
+
+其余逻辑（generate_reply、会话存储）保持不变，参考 server.py:201
+
+插入位置 C（可选但推荐）：在 config.py 增加 RAG 配置项
+可新增字段：
+
+rag_enabled
+
+rag_top_k
+
+rag_candidate_limit
+
+rag_max_chars_per_chunk
+
+你当前已有可复用函数（不用重写）
+
+向量化： utils.py:10
+
+排序： utils.py:38
+
+候选读取： repo.py:4
+
+
+直接用 FastAPI 自带调试台
+打开：
+http://127.0.0.1:8000/docs
+http://127.0.0.1:8000/redoc
+这里可以直接点接口、填参数、上传文件、看 JSON 返回，中文基本不会乱码。你现在已有的上传和检索接口都能直接测。
+
+你下一步该做的“资料管理”我建议先补 3 个接口（最小闭环）：
+
+列表接口
+GET /materials?course_id=1&limit=20&offset=0
+用途：展示文档列表（文档ID、标题、类型、chunk数、创建时间）
+
+删除接口
+DELETE /materials/{document_id}
+用途：删文档时级联删 chunks（和 embedding 一起清理）
+
+详情接口（可选但推荐）
+GET /materials/{document_id}
+用途：看单个文档基本信息 + chunk 数量，便于排错
+
+结合你现有代码位置：
+
+接口新增在 server.py
+数据访问函数新增在 repo.py
+连接事务你已有 db.py 可复用
+我建议的 repo 层函数签名（你可以按这个写）：
+
+list_documents
+def list_documents(course_id: int | None = None, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]
+
+get_document_detail
+def get_document_detail(document_id: int) -> dict[str, Any] | None
+
+delete_document_with_chunks
+def delete_document_with_chunks(document_id: int) -> bool
+
+为什么先做这个：
+
+这是你第2周周末任务里的核心缺口
+做完就能在 docs 里完整演示上传-检索-删除闭环
+后续再加小前端时，接口已经齐全
+关于“小前端还是后端调试台”：
+
+现在先用 /docs，成本最低，今天就能测
+之后再做一个极简调试页（单文件 HTML），只做三个按钮：上传、列表、删除
+这页可以放到后端静态目录，浏览器里点点就能验收，不再碰 PowerShell 编码
+
+参数配置化待办（技术债，后续统一迁移到 settings）
+- [ ] RAG 检索默认参数：chat 中 top_k=3、candidate_limit=500 改为 settings.rag_top_k、settings.rag_candidate_limit
+- [ ] 文档解析参数：upload 中 chunk_size=600、overlap=80 改为 settings.chunk_size、settings.chunk_overlap
+- [ ] 列表分页参数：list_documents 的默认/上限（20、100）改为 settings.materials_page_size_default、settings.materials_page_size_max
+- [ ] 向量候选读取上限：list_chunks_with_embedding 的默认 limit=2000 改为 settings.embedding_candidate_limit
+- [ ] 检索接口默认参数：SearchRequest 的 top_k=5、candidate_limit=1000 改为 settings.search_top_k_default、settings.search_candidate_limit_default
+- [ ] 对话历史轮数换算：history_max_rounds * 2 的消息换算系数提取到 settings.history_messages_per_round
+- [ ] 超时参数补齐：remote_timeout_sec、embedding_timeout_sec 全部从环境变量读取，避免代码硬编码
+- [ ] 开关命名统一：ChatRequest.user_retrieval 重命名为 use_retrieval，避免语义歧义
+- [ ] 安全治理：config.py 内硬编码 API Key/Base URL 改为环境变量（仅保留安全默认值或空值）
+- [ ] 文档同步：README 增加 .env 示例和参数说明（默认值、作用、推荐范围）
+
+
+
+D1 你今天2小时怎么做（可直接执行）
+
+0-20 分钟：定三层记忆的数据契约
+短期记忆：recent_messages
+长期偏好：preferences_summary
+学习进度：progress_summary
+统一返回 memory_context_text（一个字符串，便于注入system）
+20-60 分钟：建 repo 函数签名（先写空实现也行）
+get_user_preferences(user_id, limit)
+upsert_user_preference(...)
+list_learning_progress(user_id, course_id, limit)
+upsert_learning_progress(...)
+60-90 分钟：改 chat 主流程接入 memory_service
+在 server.py:381 的 chat 里增加 user_id 读取
+在生成 final_messages 前调用 build_memory_context
+将 memory_context 作为 system 信息插入（和你现有 inject_system_prompt 机制一致）
+90-120 分钟：做最小验收
+同 user_id 不同 session_id 能看到同一份长期偏好被注入
+改 session_id 时短期历史隔离
+服务重启后长期偏好仍在（短期丢失可接受）
+D1 完成标准（建议你照这个打勾）
+
+代码里出现明确三层边界：short / preference / progress。
+聊天前只有一个入口函数负责记忆注入。
+无 user_id 时可降级，不影响当前聊天主流程。
+重启后长期数据不丢，短期可丢（D1阶段允许）。
+你这个项目的关键提醒
+
+先做“结构拆分”，别在 D1 里做偏好抽取算法。抽取放到 D2 正合适。
+先保证接口和数据模型稳定，再调提示词，不然后面会反复返工。
+目前配置里有硬编码密钥，后面建议尽快转环境变量，避免协作风险（见 config.py:20 附近）。
+如果你愿意，我下一条可以直接给你“D1可粘贴的实现蓝图”：包含表结构SQL、repo函数签名、memory_service函数签名、以及 chat 中的插入点清单。
+
+
+
+D2 开工单（偏好提取与持久化升级）
+你接下来按这个顺序做：
+
+规则抽取从“关键词硬编码”升级为“可维护映射”
+新建一个规则字典，至少含：关键词集合、目标key、value、confidence。
+让 extract_memory_signals 迭代规则，而不是写死 if/any。
+增加去重/节流
+同一 user_id + key + value 在短时间内重复写入时跳过（例如 1 小时内）。
+目标：减少无效 upsert，降低日志噪音。
+增加最小可观测性
+每次写回记录：命中规则数、写入成功数、失败数。
+用 logging.info 打结构化字段，便于后续评估抽取效果。
+做回归集（5 条就够）
+2 条偏好命中
+2 条进度命中
+1 条不命中
+验收：写入数量和预期一致，且未误写。
+你现在可以先做第 1 条。我下一轮可以帮你给“规则字典模板 + 函数改造骨架”（仍然只给示例，不代改）。
+
+
+提取并配置节流窗口：把 short_write_window / throttle_window 提取到 config.py（例如 throttle_window_minutes），
+并在 persist_memory_signals 里用 timedelta(minutes=settings.throttle_window_minutes) 替代硬编码。验证：修改后
+重跑 python test_memory_regression.py，观察日志中跳过/写入比例是否按期望变化。
+
+为进度写入维护元数据：在 learning_progress 表增加 last_seen/hit_count（或 document_id），并把 
+repo.upsert_learning_progress 改为 upsert 更新这些字段，便于长期趋势判断与去重。验证：执行 DB migration，再调用回
+归脚本后用 SQL 检查 hit_count/last_seen 是否更新。
+
+把 document_id -> course_id 映射在 chat 路径稳定化：确认在 server.py 的 chat 流程中，所有通过 payload.document_id
+ 触发的 extract_memory_signals 都传入了解析后的 course_id（get_document_detail）。验证：运行 test_long_term_fix.py，
+ 并查看 learning_progress.course_id 是否正确。
+
+扩大规则覆盖与质量打点：在 memory_rules.py 增补常见表达（已加语言关键字规则），并在 persist_memory_signals 为每条 signal
+ 打 rule_id + result（你已加了），再跑回归并记录命中率。验证：python test_memory_regression.py，检查日志中 
+ persist_*_attempt/result、并手工抽查 DB。
+
+事件日志或聚合策略（中长期）：如果想要高度可回溯与审计，将每次信号 append 到 memory_events 表，离线聚合成偏好/进度；
+适合需要回溯/A/B 的场景。改动点：新增表 + 一个简单聚合脚本/cron。验证：生成若干事件后运行聚合脚本，检查聚合结果与 DB 
+偏好表一致。
+
+自动化回归与 CI：把 test_memory_regression.py 加入到项目脚本（或简单 GitHub Action），每次改规则或持久化逻辑自动跑
+回归并输出 summary（命中数/写入数/失败数）。验证：在本地运行 python test_memory_regression.py 并把成功输出作为 CI 
+断言之一。
+
+
+
+完整开发计划
+当前架构理解
+现在的结构是：
+
+documents 表存资料，course_id 是个简单整数字段
+没有独立的 Course 实体
+前端只有一个资料列表页，没有课程概念
+对话时只能选一个 document_id
+目标架构
+课程广场 (CoursesPage)
+  └─ 课程卡片（封面=第一个PPT缩略图，课程名，资料数）
+       └─ 点击进入 CourseDetailPage
+            ├─ 左侧：PPT/文档列表（可多选，可点击预览）
+            └─ 右侧：对话区（支持多文档RAG + 联网RAG可选）
+分阶段计划
+阶段一：后端数据库 & API 扩展
+1.1 新增 courses 表
+
+CREATE TABLE courses (
+  id SERIAL PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT 'default_user',
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  cover_document_id INT DEFAULT NULL,  -- 封面用的资料ID
+  created_at TIMESTAMP DEFAULT NOW()
+);
+documents 表的 course_id 字段含义升级为关联 courses.id。
+
+1.2 新增后端接口
+
+方法	路径	说明
+POST	/courses	新建课程
+GET	/courses	列出课程（含每课程文档数+封面缩略图URL）
+GET	/courses/{id}	课程详情
+DELETE	/courses/{id}	删除课程（级联删资料）
+GET	/courses/{id}/materials	列出课程下所有资料
+GET	/materials/{id}/thumbnail	返回资料首页缩略图（PNG）
+GET	/materials/{id}/view	返回资料文件本身（供预览）
+1.3 修改 /chat 接口
+
+ChatRequest 增加 document_ids: List[int]（多文档），检索时对所有选中文档做 embedding 检索后合并 top_k 结果。
+
+1.4 联网 RAG（搜索增强）
+
+新增字段 use_web_search: bool，后端集成搜索 API（如 SerpAPI / Bing Search API / DuckDuckGo），将搜索结果摘要注入为额外 system 消息，与本地 RAG 并列供 AI 参考。
+
+阶段二：前端页面重构
+2.1 新增页面路由
+
+sidebar:
+  [课程]  → CoursesPage（新建课程 + 卡片列表）
+  [对话]  → 独立全局对话（不绑课程，当前功能保留）
+  [设置]  → 同现在
+2.2 CoursesPage（课程广场）
+
+顶部：新建课程按钮（弹窗输入名称）
+内容区：网格卡片，每张卡片：
+封面 = 第一个资料的首页缩略图（灰色占位图兜底）
+课程名 + 资料数 badge
+点击进入 CourseChat
+2.3 CourseChatPage（课程对话页） 布局：左侧栏 280px | 右侧对话区
+
+左侧栏：
+
+课程名标题
+"上传资料" 按钮
+资料列表（每项：缩略图小图、文件名、chunk数）
+checkbox 多选（选中的参与 RAG）
+点击缩略图/文件名 → 右侧打开预览面板
+右侧：
+
+顶部工具栏：已选资料 chips、"联网搜索" 开关
+对话区（同现有）
+输入框（同现有，支持拖拽图片）
+2.4 PPT/PDF 预览
+
+使用浏览器原生 <iframe src="/materials/{id}/view"> 直接渲染 PDF
+PPT 文件（.pptx）：后端先用 python-pptx 转为 PDF 再提供预览
+预览面板可以收起，支持左右分栏显示
+阶段三：联网 RAG
+后端实现步骤：
+
+config.py 新增 web_search_api_key、web_search_provider（默认 duckduckgo，无需 key）
+utils.py 新增 web_search(query, top_k=5) 函数：
+优先 DuckDuckGo（免费，用 duckduckgo_search 库）
+可选 SerpAPI / Bing
+返回 [{title, url, snippet}]
+server.py chat 端点：若 use_web_search=True，在 embedding 检索之后额外调用 web_search，将结果格式化后追加到 retrieval context
+
+
+能拖拽图片但只能看缩略图不能点开看大图，图片url
+发到聊天里它说没看到，不清楚是模型问题还是后端问题，前端问题，没发过来，可以用个人免费云服务器
+设置里能不能加音频输入设备，音频输入按钮点了没用，也可以用一个语音转文字的ai
+后面要加文字转语音，要接输出设备耳机扬声器之类的
+election的白边
+
+图片输入的流没放到多模态模型里去
+得新开一个非问答式对话，并且支持长时记忆功能（有语音输入和输出，输入可语音可文本。输出也可语音可文本，
+但是不是那种按钮点击才播放，是直接播放，之后会加live2d，模拟人格语气，加多模态模块进行游戏操作）
+
+一个对话，一个持久聊天（记忆方面可转研究），一个学习助手，然后是外接qq机器人
+
+总目标（你要的“最纯粹类人聊天”）
+新增一个左侧可切换功能块（比如叫“陪伴聊天”）：
+
+输入：文本 + 语音（都支持）
+输出：始终自动语音播报（不点按钮）
+聊天风格：人格化语气
+后续：Live2D、长时记忆、多模态、游戏操作
+Phase 1（MVP，先做出来）1~2周
+1) 前端新功能块
+左侧栏新增入口：陪伴聊天
+新页面组件：CompanionChatPage
+UI 极简：
+顶部：连接状态、人格名称
+中间：对话流
+底部：文本输入 + 按住说话/自动语音识别
+和现在课程问答彻底隔离，不混用那个复杂面板
+2) 输入链路（文本/语音统一）
+文本输入：直接发到 /chat
+语音输入：
+浏览器录音（MediaRecorder）
+发到 /stt
+STT文本再送 /chat
+两种输入统一写入同一个 messages 流
+3) 输出链路（必须自动语音）
+每次 /chat 返回后，立即调用 /tts
+自动播放返回音频（队列播放，防重叠）
+支持“打断当前播报”（用户开口说话时停止当前音频）
+4) 验收标准
+不点任何“播报按钮”，AI每次回复都会说话
+语音输入→回复语音全链路稳定
+首包延迟可接受（<2.5s 先为目标）
+Phase 2（拟人化 + 长时记忆）2~3周
+1) 人格系统
+增加 persona_id（如：温柔、毒舌、教练）
+后端 system prompt 模板化
+每个人格有固定：
+语气词
+说话长度偏好
+禁忌词/边界规则
+2) 长时记忆（重点）
+拆三层记忆：
+会话记忆（短期）
+用户画像（长期偏好）
+事件记忆（关键事实）
+记忆写入策略：
+仅写“高价值事实”
+去重、过期、冲突覆盖
+回忆策略：
+每轮只注入最相关Top-K记忆（你已有这套雏形，可复用）
+3) 验收标准
+人格切换后，回复风格明显变化
+对用户偏好能跨天记住并正确调用
+不出现记忆污染（胡乱记错）
+Phase 3（Live2D融合）1~2周
+1) Live2D接入
+前端加 Live2DView 容器（Canvas）
+状态驱动动画：
+思考中
+说话中（口型）
+倾听中
+音频播放时驱动口型参数（RMS音量映射）
+2) 交互事件
+鼠标悬停、点击触发动作
+情绪映射到表情（开心/困惑/认真）
+3) 验收标准
+语音播放时口型同步
+聊天状态和动作一致，无明显卡顿
+Phase 4（多模态 + 游戏操作）3~6周
+1) 多模态扩展
+输入：截图、摄像头、屏幕捕获
+理解：视觉模型/检测模块
+输出：语音 + 文本 + 动作建议
+2) 游戏操作模块（安全边界先行）
+先做“建议模式”（不自动执行）
+再做“半自动”（用户确认才执行）
+最后做“自动执行”但必须有：
+白名单动作
+冷却机制
+紧急停止热键
+3) 技术架构建议
+新建 action_router：
+observe（看）
+plan（想）
+act（做）
+记录每一步轨迹，便于回放和调试
+工程拆分建议（很关键）
+CompanionChatPage（新页面）
+voiceService（录音/STT/TTS/播放队列）
+personaService（人格配置）
+memoryService（写入/检索/压缩）
+live2dService（状态驱动）
+agentActionService（后续游戏操作）
+你现在就能开始的“第一周任务清单”
+左侧栏加 陪伴聊天入口
+新建 CompanionChatPage（纯聊天UI）
+打通 文本输入→/chat→自动/tts播放
+打通 语音输入→/stt→/chat→自动/tts
+加音频播放队列和打断机制
+做3个稳定性测试（连续对话、网络慢、快速打断）
+如果你愿意，我下一步可以直接给你一版**“Phase 1 
+的详细接口与前端状态机设计图（按你现在这个项目结构）**，你可以照着一天内开工。
+
+意图分别和长时记忆
+打断说话，vad，去重
+
+可用资源来源
+
+官方免费样例（最推荐，先用这个跑通）
+Live2D Sample Data
+Sample Terms
+Free Material License
+官方 Web SDK 参考仓库（看标准目录和加载流程）
+CubismWebSamples
+CubismWebFramework
+前端渲染库（工程接入最省事）
+pixi-live2d-display
+你要下载的模型文件
+
+最小必需：model3.json、moc3、textures
+推荐同时准备：motion3.json、exp3.json、physics3.json、pose3.json、cdi3.json、userdata3.json（有就全带上）
+存放建议：放到前端静态目录，比如 desktop-app/public/live2d/模型名/
+Plan: Live2D 前后端联调落地
+先用官方可追溯授权的样例模型跑通最小链路（前端渲染 + 后端 JSON 动作意图），再做动作映射与稳定性增强。推荐路线是：前端接入 pixi-live2d-display 执行动作，后端继续通过 /companion/chat 产出 action_intents，并保留 /companion/act 作为校验与审计通道。
+
+Steps
+
+阶段A：模型来源与许可证确认（阻塞后续步骤）。
+从官方 Free Samples 选 1 个入门模型（建议 Simple model 或 Mark-kun），记录该模型条款和是否需要署名文案。
+阶段B：模型文件准备（依赖步骤1）。
+下载模型 runtime 文件集并放到前端静态目录。
+建立模型清单配置：记录 model3.json 路径、默认缩放/位置、动作组名映射（例如 Idle、TapBody）。
+阶段C：前端渲染接入（依赖步骤4，可与阶段D并行）。
+在前端安装 pixi.js 和 pixi-live2d-display，并准备 Cubism Core（对应版本）。
+新建 Live2D 渲染组件，负责画布生命周期、模型加载、销毁、resize、错误日志。
+用真实画布替换 Companion 页中的占位区域。
+新增 applyIntent(intent) 分发器：expression、motion、look_at 三类本地执行；不合法动作记录日志并忽略。
+阶段D：前后端协议打通（可与阶段C并行）。
+Companion 页面请求从 /chat 切到 /companion/chat，读取 reply、tts_text、emotion、action_intents。
+收到 action_intents 后前端立即执行；可选再调 /companion/act 做后端确认与审计。
+阶段E：后端动作策略与可观测性（依赖步骤12）。
+继续使用 validate_intent 白名单和范围校验，防止非法动作进入执行层。
+dispatch_intent 先保留 mock 通路，后续再替换真实 adaptor。
+增加动作日志字段：session_id、intent_type、结果、失败原因。
+阶段F：联调验证（依赖阶段C+D）。
+手工用例：笑一下、挥手、看左边、连续动作、非法动作、模型未加载场景。
+异常用例：模型文件缺失、动作组名不匹配、模型返回非纯 JSON、网络超时。
+阶段G：发布前门禁。
+许可证与版权文案检查。
+性能检查（首屏加载、CPU/GPU、Electron 内存），必要时加懒加载和纹理优化。
+本期范围收口：单模型稳定联调，不做多模型热切换与复杂编排。
+Relevant files
+
+CompanionChatPage.jsx:139 — 当前仍走 chatApi。
+CompanionChatPage.jsx:414 — 目前还是 Live2D 占位区域。
+api.js:4 — 当前固定走 /chat，需补 companion API。
+package.json:1 — 需加入 Live2D 渲染依赖。
+server.py:895 — /companion/chat 已具备 JSON 输出和动作解析流程。
+server.py:996 — /companion/act 已有校验与分发入口。
+server.py:876 — dispatch_intent 当前是 mock，后续替换 adaptor。
+server.py:863 — validate_intent 可直接复用为动作安全边界。
+config.py:63 — 已有 JSON 输出约束模板，可继续强化动作字段提示。
+Verification
+
+Companion 页面可见真实 Live2D 模型而非占位文案。
+聊天触发动作时，模型按 action_intents 执行表情和动作。
+/companion/chat 在 JSON 解析失败场景能回退文本，不导致页面崩溃。
+/companion/act 的 applied/rejected 与前端执行日志一致。
+模型资源缺失或动作名不匹配时，聊天不受阻，动作优雅降级。
+许可证要求的署名或限制在产品说明中已落实。
+Decisions
+
+架构采用“后端产出意图 + 前端执行渲染”，这是当前项目最短路径。
+先只跑 Cubism 4/5 路线（model3.json + moc3），不引入 Cubism 2 兼容复杂度。
+资源优先官方免费样例，社区模型默认视为需逐个核验许可证。
+本期交付单模型可控链路，不扩展多模型和复杂引擎编排。
+Further Considerations
+
+动作执行时机：A 前端立即执行（推荐，低延迟）；B 等 /companion/act 确认后执行（一致性高但更慢）。
+资源策略：A 仅官方样例（推荐，风险最低）；B 接社区模型（速度快但版权核验成本高）。
+范围策略：A 先把 expression 和 motion 跑稳（推荐）；B 同期接 game_control（范围更大、联调风险更高）。
+如果你同意，我下一轮就按这个计划继续细化成“第1天到第3天的执行清单”（每天具体做到哪些文件和验证点）。
+
+
+开门限： CompanionChatPage.jsx:35
+关门限： CompanionChatPage.jsx:36
+静音提交延迟： CompanionChatPage.jsx:38
+最长句段： CompanionChatPage.jsx:40
+
+你的方向是对的，示例项目的“快”主要不是靠一个神奇模型，而是靠链路设计。
+
+先说结论
+
+示例项目没有在代码里内置本地轻量聊天模型加载逻辑（没有直接加载 transformers、gguf、llama.cpp 这类本地推理栈），而是统一走 OpenAI 兼容接口，你可以把后端指向云端或本地服务。openai_compatible.py:27 requirements.txt:1
+它的快速答复核心是：流式输出 + 轻量决策层 + 先回执后后台执行 + 并发与上下文压缩。openai_compatible.py:115 roleplay.py:142 coordinator.py:175
+示例项目为什么快
+
+模型流式回传：后端直接解析 SSE chunk 并逐段产出，前端持续读流，不等整段生成完。openai_compatible.py:298 api.js:37
+轻量层分流：先用轻量决策/角色层处理“闲聊和确认语”，重任务再进入 Agent，减少重链路命中率。bootstrap.py:128 decision.py:136
+先回执再后台：需要重任务时，先发一句“正在处理”，体感延迟明显下降。coordinator.py:175
+并发和会话锁：按 route 限制并发、隔离会话，避免相互拖慢。runtime.py:35
+记忆压缩：把历史压缩成 summary，降低上下文 token 负担。support.py:67
+你项目当前的高优先级瓶颈
+
+前端主聊天与陪伴聊天都在走非流式接口，用户必须等完整回复后才看到内容。App.jsx:271 CourseChatPage.jsx:170 CompanionChatPage.jsx:301
+后端虽然有流式接口，但你前端没用起来。api.js:37 chat_router.py:46
+聊天前置步骤较重：每轮都做偏好/进度/提醒读取与写回，增加首字前阻塞。chat_service.py:633 chat_service.py:673
+数据库访问是同步直连、每次新建连接，吞吐上来后时延会抖动。db.py:10
+当前聊天模型是远程 DeepSeek-V3.2，不是本地轻量聊天模型。config.py:20
+可落地改进计划（按收益排序）
+
+第一阶段（1-2天，立竿见影）
+
+把 App、课程聊天、陪伴聊天统一切到 chat/stream，前端逐字渲染。
+
+保留失败回退到非流式，避免上游不稳时不可用。
+
+陪伴模式增加“快速回执句”（先回一句短话，再继续完整回答）。
+
+第二阶段（2-4天，降低首字延迟）
+
+把 chat_service 里的同步数据库操作放入线程池，避免阻塞主事件循环。
+
+给陪伴模式加 lightweight 标记，跳过重记忆写回与提醒扫描。
+
+减少非必要前置步骤在首字前执行，能后移的后移到回复后异步。
+
+第三阶段（3-5天，结构性优化）
+
+引入双模型路由：fast_chat_model（轻量快）+ agent_model（重任务）。
+
+普通闲聊默认走 fast_chat_model；只在检索/工具/复杂任务时走重模型。
+
+参考示例项目的 delegated_ack_enabled 机制，统一体感响应策略。
+
+第四阶段（可选，本地轻量模型）
+
+你当前代码本身就走 OpenAI 兼容协议，可直接把 REMOTE_PRIMARY_API_BASE_URL 指向本地服务（如 vLLM/Ollama 兼容端点），REMOTE_PRIMARY_MODEL 改为本地模型名。model_service.py:41
+
+先从 1.5B-3B 量级模型做 fast_chat，再观察显存/首字延迟与质量平衡。
+
+如果你愿意，我下一步可以直接给你出一版“最小改造补丁清单”，只改 4 个文件先把陪伴聊天提速：
+
+前端切流式
+后端陪伴轻量路径
+同步 DB 前置下沉
+延迟埋点（TTFT、总耗时、P95）
+
+
+app/
+
+api/
+routers/
+chat_router.py
+companion_router.py
+speech_router.py
+orchestration/
+intent_router.py
+decision_engine.py
+conversation_coordinator.py
+job_store.py
+dialogue/
+roleplay_engine.py
+response_presenter.py
+agent_core/
+planner.py
+executor.py
+tool_registry.py
+memory/
+short_term_store.py
+summary_store.py
+long_term_store.py
+memory_policy.py
+services/
+model_service.py
+embedding_service.py
+speech_service.py
+infra/
+repo.py
+db.py
+queue.py
+metrics.py
+configs/
+config.py
+docs/
+architecture_tree.md
+sequence_decision_flow.md
+runbook.md
+tests/
+test_intent_router.py
+test_coordinator.py
+test_memory_policy.py
+
+
+你的边界很清晰：先不动普通问答链路，只在陪伴链路做意图分析。这个方向是对的。
+
+一、只改 companion 的落地计划
+影响范围只放在 routers/companion_router.py 和新建的编排模块，不改 chat_service.py。
+
+范围冻结
+
+明确普通聊天接口不改行为、不改参数、不改延迟目标。
+
+仅在陪伴接口前置一层 CompanionIntentAnalyzer。
+
+意图类型定义
+
+small_talk：日常陪聊、情绪回应。
+
+companion_action：表情、动作、look_at、游戏控制。
+
+knowledge_query：问知识但不需要工具。
+
+heavy_task：需要检索、联网、文件或系统操作。
+
+unclear：低置信度，触发澄清问题。
+
+分析器实现顺序
+
+第一步规则引擎：关键词、句式、上下文状态。
+
+第二步轻量模型兜底：规则不确定时再调用小模型分类。
+
+输出统一结构：intent、route、confidence、reason。
+
+路由策略
+
+small_talk 和 companion_action 走当前 companion 轻量回复路径。
+
+knowledge_query 仍走 companion，但提高上下文窗口或切专用知识 prompt。
+
+heavy_task 不在 companion 内硬做，先回一句确认，再转主任务通道或任务队列。
+
+unclear 返回简短澄清问句，避免误执行动作。
+
+观测与验收
+
+日志记录：intent、confidence、route、最终耗时。
+
+验收样例至少 30 条，目标是 companion_action 命中率高于 90%。
+
+回归检查：动作协议字段不变，前端无需改协议。
+
+二、意图分析原理（你可以这样理解）
+核心是“分层判定，先快后准”。
+
+特征输入
+
+文本特征：动词、对象、命令句式。
+
+交互特征：是否带图片/音频、是否在语音连续会话中。
+
+上下文特征：上一轮是否在执行动作，是否刚发生失败回退。
+
+判定流程
+
+规则层先判：命中强规则直接给结果，速度最快。
+
+轻模型兜底：规则冲突或低把握时，用小模型做分类。
+
+置信度门控：低于阈值不执行高风险动作，改为澄清。
+
+为什么有效
+
+绝大部分命令其实模式稳定，规则层就够快。
+
+小模型只处理边界样本，既省时又提升覆盖。
+
+用置信度做安全闸门，降低误触发动作和误路由。
+
+三、你问的 import 集中管理问题
+可以做，但不建议“一个文件把所有库全 import，然后全项目都从它转 import”。
+
+
+阶段2：做结构化长期记忆（3-5天）
+目标：从“偏好键值对”升级到“事实型长期记忆”。
+
+新建 companion_memory 表（建议）
+字段建议：
+
+user_id
+
+session_id
+
+mem_type（preference/fact/goal/boundary）
+
+key
+
+value
+
+confidence
+
+evidence
+
+hit_count
+
+last_seen_at
+
+expires_at（可空）
+
+仓储层方法
+在 repo.py 新增：
+
+upsert_companion_memory
+
+search_companion_memory
+
+decay_companion_memory
+
+delete_companion_memory
+
+检索排序
+得分建议：
+
+score = 0.55相关性 + 0.25置信度 + 0.20*新鲜度
+先用关键词相关性即可，后续可接 embedding。
+验收标准：
+
+用户改口偏好后，旧偏好 3 次内被新偏好覆盖
+记忆误召回率低于 10%
+阶段3：加入“遗忘与纠错”机制（2天）
+目标：防止记忆污染和人格漂移。
+
+遗忘策略
+
+临时事实设置 TTL（如 7-14 天）
+
+连续低命中记忆自动降权
+
+冲突记忆按时间和置信度淘汰
+
+纠错策略
+
+当用户说“不是这个意思/我改主意了”时，触发纠正写入
+
+记录冲突链，避免来回震荡
+
+验收标准：
+
+错记可在 1-2 轮内纠正
+不再反复引用已过期偏好
+阶段4：可观测与调优（持续）
+目标：让记忆质量可量化。
+
+记录指标
+
+memory_read_count
+
+memory_write_count
+
+memory_hit_rate
+
+memory_conflict_rate
+
+memory_latency_ms
+
+增加调试接口（建议）
+
+companion memory debug：显示本轮读了哪些记忆、为何命中、最终注入内容
+你可以按这个最小实施顺序开始：
+
+在 companion_router.py 增加记忆读取注入
+增加 companion 的记忆规则提取并写入（先复用 repo.py:379）
+加记忆日志字段，先跑 30 条样本评估
+再决定是否上 companion_memory 新表
+如果你要，我下一步可以直接给你“阶段1的具体代码改造清单（精确到函数和插入位置）”，你照着改就能跑。
+
+
+
+
+
+可以，完全可以做，而且你这个流程非常适合“主任务模式”。
+
+给你一个可落地的三代理流水线计划：Planner -> Executor -> Reviewer，Reviewer 不通过就回流重试，只有通过才回“已完成”。
+
+阶段1：流程骨架（先跑通）
+
+新建任务编排器 agent_core/multi_agent_pipeline.py
+定义统一输入输出：task_id、goal、constraints、artifacts、status、review_report。
+
+定义三类代理职责
+
+Planner：只产出计划，不执行
+Executor：只按计划执行并产出证据
+Reviewer：只审查证据与结果，不补做执行
+定义状态机
+created -> planned -> executing -> reviewing -> passed/failed -> completed
+失败时：reviewing -> executing（带修复建议回流）
+
+在主任务入口接管
+在主任务路由（非 companion）进入时，如果 intent=heavy_task，则走 pipeline 而不是单步模型调用。
+
+阶段2：数据契约（保证不跑偏）
+
+Planner 输出 JSON（强约束）
+steps: [{id, action, expected_output, risk}]
+acceptance_criteria: []
+max_iterations
+Executor 输出 JSON
+step_results: [{step_id, status, output, evidence_refs}]
+artifacts: [{type, path_or_text, checksum}]
+unresolved_risks
+Reviewer 输出 JSON
+verdict: pass/fail
+failed_checks: []
+fix_instructions: []
+confidence
+统一评审门槛
+所有 acceptance_criteria 命中
+无高风险 unresolved_risks
+关键 artifact 存在且可读取
+阶段3：回流与终止条件（防死循环）
+
+最大回流次数（建议 2 或 3 次）
+超过次数直接 fail，并返回 reviewer 最后报告。
+
+差异执行
+回流时 Executor 仅执行 Reviewer 指定修复项，不全量重跑。
+
+人工接管点
+如果 reviewer 连续两次同一类失败，提示用户“需要人工决策”。
+
+阶段4：可观测与可追踪（上线必备）
+
+每次运行保存 trace
+planner_prompt/planner_output
+executor_actions/artifacts
+reviewer_report
+指标
+pipeline_success_rate
+avg_iterations
+review_reject_rate
+time_to_complete
+回放工具
+给定 task_id 输出全链路事件，方便复盘。
+阶段5：接入你当前项目的具体落点
+
+新文件建议
+agent_core/multi_agent_pipeline.py
+agent_core/planner_agent.py
+agent_core/executor_agent.py
+agent_core/reviewer_agent.py
+agent_core/contracts.py
+路由接入点
+在主任务模式入口根据意图触发 pipeline（不要放在 companion）。
+存储接入
+先用文件落地 data/pipeline_runs/{task_id}.json，后续再上 DB。
+最小可行版本（MVP）顺序
+
+先实现三代理 JSON 契约和状态机
+先做单次评审（不回流）
+再加回流重试
+再加 artifact 校验和审计日志
+如果你要，我下一步可以直接把这个 MVP 骨架代码一次性建出来，并把主任务入口接上开关（比如 ENABLE_MULTI_AGENT_PIPELINE=true）。

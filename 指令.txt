@@ -1,0 +1,64 @@
+$body = @{
+  session_id = "test-week2"
+  use_retrieval = $true
+  document_id = 4
+  messages = @(@{ role = "user"; content = "请总结这份资料的核心知识点" })
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/chat" -Method Post -ContentType "application/json" -Body $body
+
+# 后端首次下载 STT 模型（在后端终端执行，允许走代理）
+$env:PIP_DISABLE_PIP_VERSION_CHECK='1'
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:HTTP_PROXY='http://127.0.0.1:33210'
+$env:HTTPS_PROXY='http://127.0.0.1:33210'
+$env:NO_PROXY='127.0.0.1,localhost,::1'
+
+# 仅在“本地 STT 模式”下，首次准备 sherpa-sense-voice 本地模型（只需执行一次）
+$modelUrl='https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2'
+$tmp='D:\models\_tmp_sherpa_sense_voice'
+$target='D:\models\sherpa-sense-voice'
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Invoke-WebRequest -Uri $modelUrl -OutFile "$tmp\model.tar.bz2"
+tar -xjf "$tmp\model.tar.bz2" -C $tmp
+$src = Get-ChildItem -Path $tmp -Recurse -Directory |
+  Where-Object { (Test-Path "$($_.FullName)\model.int8.onnx") -and (Test-Path "$($_.FullName)\tokens.txt") } |
+  Select-Object -First 1
+if (-not $src) { throw '未找到 model.int8.onnx/tokens.txt，请检查下载是否完整' }
+New-Item -ItemType Directory -Force -Path $target | Out-Null
+Copy-Item "$($src.FullName)\model.int8.onnx" "$target\model.int8.onnx" -Force
+Copy-Item "$($src.FullName)\tokens.txt" "$target\tokens.txt" -Force
+
+# 模式A：本地 STT（sherpa-sense-voice）
+# 已在 config.py 固定默认值：
+# STT_PROVIDER=sherpa_sense_voice
+# LOCAL_STT_SHERPA_MODEL_DIR=D:\models\sherpa-sense-voice
+# 以下环境变量只在你想临时覆盖默认值时再设置：
+# $env:STT_PROVIDER='sherpa_sense_voice'
+# $env:LOCAL_STT_SHERPA_MODEL_DIR='D:\models\sherpa-sense-voice'
+# $env:LOCAL_STT_SHERPA_MODEL_FILE='model.int8.onnx'
+# $env:LOCAL_STT_SHERPA_TOKENS_FILE='tokens.txt'
+# $env:LOCAL_STT_SHERPA_PROVIDER='cpu'
+# $env:LOCAL_STT_SHERPA_NUM_THREADS='2'
+# $env:LOCAL_STT_SHERPA_SAMPLE_RATE='16000'
+# $env:LOCAL_STT_SHERPA_LANGUAGE='auto'
+
+# 模式B：云端 STT（OpenAI 兼容接口，不需要下载 sherpa 模型）
+# $env:STT_PROVIDER='remote_openai_compatible'
+# $env:STT_MODEL='FunAudioLLM/SenseVoiceSmall'
+$env:STT_NOISE_BLOCKLIST='字幕制作人,字幕製作人,字幕by,Zither Harp,索兰娅'
+$env:MAX_NEW_TOKENS='160'
+$env:REMOTE_STREAM_TIMEOUT_SEC='16'
+$env:REMOTE_TIMEOUT_SEC='24'
+# 可选：启用备用上游（有备用 key 时）
+# $env:REMOTE_STRATEGY='primary_then_backup'
+# $env:REMOTE_BACKUP_API_BASE_URL='https://api.siliconflow.cn/v1'
+# $env:REMOTE_BACKUP_API_KEY='你的备用key'
+# $env:REMOTE_BACKUP_MODEL='Pro/deepseek-ai/DeepSeek-V3.2'
+python server.py
+
+# 前端启动（在 desktop-app 终端执行，不要带代理）
+Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
+Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+$env:NO_PROXY='127.0.0.1,localhost,::1'
+$env:BACKEND_URL='http://127.0.0.1:8000'
+npm run dev   

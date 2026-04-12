@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# VS Code / Cursor
+.vscode/
+.cursor/
+
+# Node
+node_modules/
+desktop-app/node_modules/
+
+# Runtime and generated files
+logs/
+upload/
+data/upload/
+desktop-app/logs/
+desktop-app/data/upload/
+
+# OS files
+.DS_Store
+Thumbs.db
+
