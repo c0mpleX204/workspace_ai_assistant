@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import io
 import os
 import threading
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import requests
 
-from config.config import settings
+from server.config.config import settings
 from .text_utils import should_drop_stt_text
 
 _SHERPA_RECOGNIZER = None
@@ -282,7 +282,7 @@ def speech_to_text(audio_bytes: bytes, filename: str = "audio.webm", language: s
             )
 
     raise RuntimeError(
-        "未知 STT_PROVIDER。可用值：sherpa_sense_voice | remote_openai_compatible | auto_remote_first | auto_local_first"
+        "鏈煡 STT_PROVIDER銆傚彲鐢ㄥ€硷細sherpa_sense_voice | remote_openai_compatible | auto_remote_first | auto_local_first"
     )
 
 
@@ -402,3 +402,4 @@ def text_to_speech(text: str, voice: str = "", speed: float = 1.0) -> bytes:
     )
     resp.raise_for_status()
     return resp.content
+

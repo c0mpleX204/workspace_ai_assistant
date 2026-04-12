@@ -11,10 +11,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 
-from config.config import settings
-from dialogue.personas import PERSONAS
-from infra.repo import get_user_preference_by_key, upsert_user_preference
-from api.routers.schemas import (
+from server.config.config import settings
+from server.dialogue.personas import PERSONAS
+from server.infra.repo import get_user_preference_by_key, upsert_user_preference
+from server.api.routers.schemas import (
     CompanionActRequest,
     CompanionActResponse,
     CompanionActionIntent,
@@ -23,22 +23,22 @@ from api.routers.schemas import (
     CompanionTaskPollRequest,
     CompanionTaskPollResponse,
 )
-from memory.companion_memory import (
+from server.memory.companion_memory import (
     build_companion_memory_context,
     extract_companion_memory_signals,
     format_companion_long_term_memory,
     persist_companion_memory_signals,
     search_companion_long_term_memory,
 )
-from memory.companion_session_store import (
+from server.memory.companion_session_store import (
     DEFAULT_COMPANION_HISTORY_MAX_MESSAGES,
     load_companion_compressed_summary,
     merge_companion_dialog_history,
     save_companion_compressed_summary,
     save_companion_session_history,
 )
-from services.game_control_service import execute_game_control
-from services.model_service import smart_model_dispatch
+from server.services.game_control_service import execute_game_control
+from server.services.model_service import smart_model_dispatch
 
 router = APIRouter(tags=["companion"])
 

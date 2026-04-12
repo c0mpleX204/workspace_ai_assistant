@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 
-from orchestration.intent_router import IntentDecision, IntentRouter, RouteTarget
+from server.orchestration.intent_router import IntentDecision, IntentRouter, RouteTarget
 
 
 class RouteMode(str, Enum):
@@ -76,3 +76,4 @@ class DecisionEngine:
 			confidence=intent.confidence,
 			matched_rule=intent.matched_rule,
 		)
+

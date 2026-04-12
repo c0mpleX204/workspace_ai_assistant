@@ -1,9 +1,9 @@
-from typing import Dict
+﻿from typing import Dict
 
 from fastapi import APIRouter, HTTPException
 
-from config.config import settings
-from services.model_service import warmup_model
+from server.config.config import settings
+from server.services.model_service import warmup_model
 
 router = APIRouter(tags=["health"])
 
@@ -26,3 +26,4 @@ def api_health() -> Dict[str, object]:
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"health check failed: {exc}")
+

@@ -625,7 +625,7 @@ pixi-live2d-display
 
 最小必需：model3.json、moc3、textures
 推荐同时准备：motion3.json、exp3.json、physics3.json、pose3.json、cdi3.json、userdata3.json（有就全带上）
-存放建议：放到前端静态目录，比如 desktop-app/public/live2d/模型名/
+存放建议：放到前端静态目录，比如 client/public/live2d/模型名/
 Plan: Live2D 前后端联调落地
 先用官方可追溯授权的样例模型跑通最小链路（前端渲染 + 后端 JSON 动作意图），再做动作映射与稳定性增强。推荐路线是：前端接入 pixi-live2d-display 执行动作，后端继续通过 /companion/chat 产出 action_intents，并保留 /companion/act 作为校验与审计通道。
 

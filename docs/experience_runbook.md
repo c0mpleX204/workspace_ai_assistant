@@ -6,7 +6,7 @@
 - 激活虚拟环境并安装依赖（若尚未安装）。
 - 启动服务（在项目根）：
 ```powershell
-uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+python server.py
 ```
 - 打开一个终端用于观察日志输出。
 

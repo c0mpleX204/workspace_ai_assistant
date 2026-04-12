@@ -27,12 +27,12 @@ Request
 
 ## 3) 你执行第2项的具体步骤（手改）
 
-目标文件: services/chat_service.py
+目标文件: server/services/chat_service.py
 
 步骤 1: 在 imports 区新增
 
 ```python
-from orchestration.decision_engine import DecisionEngine, RouteMode, TurnContext
+from server.orchestration.decision_engine import DecisionEngine, RouteMode, TurnContext
 ```
 
 步骤 2: 在模块级新增单例

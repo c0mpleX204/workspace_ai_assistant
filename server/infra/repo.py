@@ -1,8 +1,8 @@
-from typing import List, Dict, Any, Optional
-from infra.db import get_conn
+﻿from typing import List, Dict, Any, Optional
+from server.infra.db import get_conn
 
 
-# ───────────────────────── courses ─────────────────────────
+# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ courses 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def create_course(name: str, term: str | None = None, owner_id: str = "default_user") -> int:
     sql = """
@@ -92,7 +92,7 @@ def update_course(course_id: int, name: str | None = None, term: str | None = No
 
 
 def delete_course(course_id: int) -> bool:
-    """级联删除课程下的所有文档和chunks。"""
+    """Cascade delete course documents and chunks."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -108,7 +108,7 @@ def list_chunks_with_embedding_multi(
     document_ids: List[int],
     limit: int = 2000,
 ) -> List[Dict[str, Any]]:
-    """多文档联合检索，返回所有选中文档的已embedding chunks。"""
+    """Batch-load embedded chunks across multiple documents."""
     if not document_ids:
         return []
     placeholders = ",".join(["%s"] * len(document_ids))
@@ -303,9 +303,9 @@ def get_document_detail(document_id: int) -> dict[str, Any] | None:
 def delete_document_with_chunks(document_id: int) -> bool:
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 先删子表，避免没有配置级联约束时报外键错误
+            # 鍏堝垹瀛愯〃锛岄伩鍏嶆病鏈夐厤缃骇鑱旂害鏉熸椂鎶ュ閿敊璇?
             cur.execute("delete from chunks where document_id = %s", (document_id,))
-            # 再删主表
+            # 鍐嶅垹涓昏〃
             cur.execute("delete from documents where id = %s", (document_id,))
             deleted_count = cur.rowcount
 
@@ -492,8 +492,8 @@ def upsert_learning_progress(
         
 def list_due_reminders(window_minutes: int = 60, limit: int = 200) -> List[Dict[str, Any]]:
     """
-    返回 next_review_at 在 now() 到 now() + window_minutes 之间的记录。
-    返回字段包含 user_id, course_id, topic, next_review_at, evidence
+    杩斿洖 next_review_at 鍦?now() 鍒?now() + window_minutes 涔嬮棿鐨勮褰曘€?
+    杩斿洖瀛楁鍖呭惈 user_id, course_id, topic, next_review_at, evidence
     """
     sql = """
     select user_id, course_id, topic, status, mastery, next_review_at, evidence
@@ -524,7 +524,7 @@ def list_due_reminders(window_minutes: int = 60, limit: int = 200) -> List[Dict[
 
 def mark_reminder_sent(user_id: str, course_id: int | None, topic: str, at_time) -> bool:
     """
-    更新 learning_progress.last_reminded_at，作为已提醒标识。
+    鏇存柊 learning_progress.last_reminded_at锛屼綔涓哄凡鎻愰啋鏍囪瘑銆?
     """
     sql = """
     update learning_progress
@@ -539,7 +539,7 @@ def mark_reminder_sent(user_id: str, course_id: int | None, topic: str, at_time)
 
 def list_user_reminders(user_id: str, lookahead_hours: int = 48, limit: int = 50) -> List[Dict[str, Any]]:
     """
-    返回用户未来 lookahead_hours 小时内的 reminders，供会话注入使用。
+    杩斿洖鐢ㄦ埛鏈潵 lookahead_hours 灏忔椂鍐呯殑 reminders锛屼緵浼氳瘽娉ㄥ叆浣跨敤銆?
     """
     sql = """
     select course_id, topic, status, mastery, next_review_at, evidence
@@ -566,5 +566,6 @@ def list_user_reminders(user_id: str, lookahead_hours: int = 48, limit: int = 50
                     "evidence": row[5],
                 })
     return result
+
 
 

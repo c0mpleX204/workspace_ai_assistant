@@ -1,4 +1,4 @@
-from config.config import settings
+﻿from server.config.config import settings
 
 
 def repair_mojibake_text(text: str) -> str:
@@ -9,21 +9,21 @@ def repair_mojibake_text(text: str) -> str:
         if any(0x80 <= ord(ch) <= 0x9F for ch in s):
             return True
         suspicious = (
-            "Ã",
-            "Â",
-            "â",
-            "ð",
-            "ï",
-            "å",
-            "ä",
-            "æ",
-            "ç",
-            "�",
-            "é",
-            "è¦",
-            "é¢",
-            "è¯",
-            "ã",
+            "脙",
+            "脗",
+            "芒",
+            "冒",
+            "茂",
+            "氓",
+            "盲",
+            "忙",
+            "莽",
+            "锟?",
+            "茅聹",
+            "猫娄",
+            "茅垄",
+            "猫炉",
+            "茫聙",
         )
         return any(tok in s for tok in suspicious)
 
@@ -57,3 +57,4 @@ def should_drop_stt_text(text: str) -> bool:
 
     lower = cleaned.lower()
     return any(tok in lower for tok in tokens)
+

@@ -7,7 +7,7 @@
 1. 进入目录并安装依赖：
 
 ```bash
-cd desktop-app
+cd client
 npm install
 ```
 

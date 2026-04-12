@@ -1,4 +1,4 @@
-import threading
+﻿import threading
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -6,8 +6,8 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from services.parser import parse_document
-from infra.repo import (
+from server.services.parser import parse_document
+from server.infra.repo import (
     create_document,
     delete_document_with_chunks,
     get_document_detail,
@@ -15,7 +15,7 @@ from infra.repo import (
     list_chunks_with_embedding,
     list_documents,
 )
-from api.routers.schemas import (
+from server.api.routers.schemas import (
     MaterialDeleteResponse,
     MaterialDetail,
     MaterialItem,
@@ -24,7 +24,7 @@ from api.routers.schemas import (
     SearchRequest,
     SearchResponse,
 )
-from services.embedding_service import embed_document_chunks, embed_text, rank_chunks
+from server.services.embedding_service import embed_document_chunks, embed_text, rank_chunks
 
 router = APIRouter(tags=["materials"])
 
@@ -47,7 +47,7 @@ async def upload_material(
 ) -> Dict[str, object]:
     suffix = Path(file.filename).suffix.lower()
     if suffix not in [".txt", ".pdf"]:
-        raise HTTPException(status_code=400, detail="仅支持 txt/pdf")
+        raise HTTPException(status_code=400, detail="浠呮敮鎸?txt/pdf")
 
     save_name = f"{uuid.uuid4().hex}{suffix}"
     save_path = UPLOAD_DIR / save_name
@@ -75,7 +75,7 @@ async def upload_material(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"上传解析失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"涓婁紶瑙ｆ瀽澶辫触: {exc}")
 
 
 @router.get("/materials", response_model=MaterialListResponse)
@@ -102,7 +102,7 @@ def list_materials(
             )
         return MaterialListResponse(items=items, total=len(items))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"获取资料列表失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鑾峰彇璧勬枡鍒楄〃澶辫触: {exc}")
 
 
 @router.get("/materials/{document_id}", response_model=MaterialDetail)
@@ -125,7 +125,7 @@ def get_material(document_id: int) -> MaterialDetail:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"获取资料详情失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鑾峰彇璧勬枡璇︽儏澶辫触: {exc}")
 
 
 @router.delete("/materials/{document_id}", response_model=MaterialDeleteResponse)
@@ -138,7 +138,7 @@ def delete_material(document_id: int) -> MaterialDeleteResponse:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"删除资料失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鍒犻櫎璧勬枡澶辫触: {exc}")
 
 
 @router.get("/materials/{document_id}/view")
@@ -159,7 +159,7 @@ def api_view_material(document_id: int):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"获取文件失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鑾峰彇鏂囦欢澶辫触: {exc}")
 
 
 @router.post("/materials/search", response_model=SearchResponse)
@@ -180,4 +180,5 @@ def search_materials(payload: SearchRequest) -> SearchResponse:
         )
         return SearchResponse(results=[SearchItem(**x) for x in ranked])
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"检索失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"妫€绱㈠け璐? {exc}")
+

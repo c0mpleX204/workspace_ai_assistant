@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import math
 import os
 from io import BytesIO
@@ -10,8 +10,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, WebSocket, WebSo
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response as FastAPIResponse
 
-from api.routers.schemas import TTSRequest
-from services.speech_service import detect_audio_media_type, speech_to_text, text_to_speech
+from server.api.routers.schemas import TTSRequest
+from server.services.speech_service import detect_audio_media_type, speech_to_text, text_to_speech
 
 router = APIRouter(tags=["speech"])
 
@@ -153,7 +153,7 @@ async def api_stt(file: UploadFile = File(...)) -> Dict[str, str]:
     try:
         audio_bytes = await file.read()
         if not audio_bytes:
-            raise HTTPException(status_code=400, detail="音频文件为空")
+            raise HTTPException(status_code=400, detail="闊抽鏂囦欢涓虹┖")
         text = await run_in_threadpool(
             speech_to_text,
             audio_bytes,
@@ -166,7 +166,7 @@ async def api_stt(file: UploadFile = File(...)) -> Dict[str, str]:
         logging.error(
             f"stt failed filename={file.filename} size={len(audio_bytes) if 'audio_bytes' in locals() else 0}: {exc}"
         )
-        raise HTTPException(status_code=500, detail=f"语音识别失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"璇煶璇嗗埆澶辫触: {exc}")
 
 
 @router.websocket("/stt/ws")
@@ -247,7 +247,7 @@ async def api_stt_ws(websocket: WebSocket) -> None:
                 await websocket.send_json(
                     {
                         "type": "error",
-                        "message": f"语音识别失败: {exc}",
+                        "message": f"璇煶璇嗗埆澶辫触: {exc}",
                     }
                 )
     except WebSocketDisconnect:
@@ -272,4 +272,5 @@ async def api_tts(payload: TTSRequest) -> FastAPIResponse:
             headers={"Content-Disposition": f"inline; filename=tts.{ext}"},
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"语音合成失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"璇煶鍚堟垚澶辫触: {exc}")
+

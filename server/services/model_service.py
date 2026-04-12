@@ -1,10 +1,10 @@
-import json
+﻿import json
 import time
 from typing import Dict, Iterator, List
 
 import requests
 
-from config.config import settings
+from server.config.config import settings
 from .text_utils import repair_mojibake_text
 
 
@@ -332,3 +332,4 @@ def smart_model_dispatch(input_data: dict) -> dict:
         model_override=model_override,
         generation=generation,
     )
+

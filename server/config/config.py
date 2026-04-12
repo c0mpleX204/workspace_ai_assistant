@@ -1,37 +1,36 @@
 import os
 from dataclasses import dataclass
-from dialogue.personas import PERSONAS
+
+from server.dialogue.personas import PERSONAS
 
 
 @dataclass
 class Settings:
-    # 生成参数
+    # Generation
     max_new_tokens: int = int(os.getenv("MAX_NEW_TOKENS", "256"))
     temperature: float = float(os.getenv("TEMPERATURE", "0.7"))
     top_p: float = float(os.getenv("TOP_P", "0.9"))
 
-    # 服务参数
+    # Service
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
-
-    # 运行控制
     log_level: str = os.getenv("LOG_LEVEL", "info")
 
-    # 远程 API（OpenAI 兼容）
+    # Primary chat model (OpenAI-compatible)
     remote_primary_api_base_url: str = os.getenv("REMOTE_PRIMARY_API_BASE_URL", "https://api.siliconflow.cn/v1")
-    remote_primary_api_key: str = os.getenv("REMOTE_PRIMARY_API_KEY", "sk-cylgdoagsltmnwzzatmxobtncwjlllmjqqhoywzlveuelfwz")
+    remote_primary_api_key: str = os.getenv("REMOTE_PRIMARY_API_KEY", "")
     remote_primary_model: str = os.getenv("REMOTE_PRIMARY_MODEL", "Pro/deepseek-ai/DeepSeek-V3.2")
 
-    # Embedding API（独立于聊天模型配置）
+    # Embedding
     embedding_api_base_url: str = os.getenv("EMBEDDING_API_BASE_URL", "https://api.siliconflow.cn/v1")
-    embedding_api_key: str = os.getenv("EMBEDDING_API_KEY", "sk-cylgdoagsltmnwzzatmxobtncwjlllmjqqhoywzlveuelfwz")
+    embedding_api_key: str = os.getenv("EMBEDDING_API_KEY", "")
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-4B")
     embedding_timeout_sec: int = int(os.getenv("EMBEDDING_TIMEOUT_SEC", "60"))
 
-    # 多模态视觉模型（有图片时自动切换）
+    # Vision fallback model
     remote_vision_model: str = os.getenv("REMOTE_VISION_MODEL", "Pro/moonshotai/Kimi-K2.5")
 
-    # 语音转文字模型 (STT / ASR)
+    # STT
     stt_provider: str = os.getenv("STT_PROVIDER", "sherpa_sense_voice")
     stt_model: str = os.getenv("STT_MODEL", "FunAudioLLM/SenseVoiceSmall")
     stt_fallback_model: str = os.getenv("STT_FALLBACK_MODEL", "")
@@ -45,10 +44,10 @@ class Settings:
     local_stt_sherpa_use_itn: bool = os.getenv("LOCAL_STT_SHERPA_USE_ITN", "false").lower() == "true"
     stt_noise_blocklist: str = os.getenv(
         "STT_NOISE_BLOCKLIST",
-        "字幕制作人,字幕製作人,字幕by,Zither Harp,索兰娅"
+        "字幕制作人,字幕製作人,字幕by,Zither Harp,索兰娅",
     )
 
-    # 文字转语音模型 (TTS)
+    # TTS
     tts_provider: str = os.getenv("TTS_PROVIDER", "auto_local_first")
     tts_model: str = os.getenv("TTS_MODEL", "FunAudioLLM/CosyVoice2-0.5B")
     tts_voice: str = os.getenv("TTS_VOICE", "FunAudioLLM/CosyVoice2-0.5B:anna")
@@ -61,12 +60,12 @@ class Settings:
     local_gpt_sovits_media_type: str = os.getenv("LOCAL_GPT_SOVITS_MEDIA_TYPE", "wav")
     local_gpt_sovits_timeout_sec: int = int(os.getenv("LOCAL_GPT_SOVITS_TIMEOUT_SEC", "45"))
 
-    # 备通道
+    # Backup channel
     remote_backup_api_base_url: str = os.getenv("REMOTE_BACKUP_API_BASE_URL", "")
     remote_backup_api_key: str = os.getenv("REMOTE_BACKUP_API_KEY", "")
     remote_backup_model: str = os.getenv("REMOTE_BACKUP_MODEL", "")
 
-    # primary_only | primary_then_backup
+    # Routing strategy
     remote_strategy: str = os.getenv("REMOTE_STRATEGY", "primary_only")
     remote_connect_timeout_sec: int = int(os.getenv("REMOTE_CONNECT_TIMEOUT_SEC", "8"))
     remote_request_retries: int = int(os.getenv("REMOTE_REQUEST_RETRIES", "1"))
@@ -76,24 +75,23 @@ class Settings:
     stt_max_retries: int = int(os.getenv("STT_MAX_RETRIES", "1"))
     tts_timeout_sec: int = int(os.getenv("TTS_TIMEOUT_SEC", "30"))
 
-    # 人物人设 id（保留为字段，便于调试）
+    # Persona
     persona_id: str = os.getenv("PERSONA_ID", "student_friend")
-    # 人物人设默认 prompt（作为回退）
     _default_persona_prompt: str = (
-        "你是校园学习伙伴。语气朋友感、鼓励、简洁。"
-        "回答控制在 3 到 6 句，先给结论再给行动建议。"
+        "你是校园学习伙伴。语气友好、鼓励、简洁。"
+        "回答控制在 3 到 6 句，先结论后行动建议。"
         "不说教，不阴阳怪气，不输出空泛鸡汤。"
     )
 
-    # Companion：system prompt 模板与 TTS 裁剪长度
+    # Companion prompt template
     companion_system_prompt_template: str = os.getenv(
         "COMPANION_SYSTEM_PROMPT_TEMPLATE",
         (
             "你是一个实时桌面陪伴助手（persona_id={persona_id}, scene={scene}）。"
-            "请只输出 JSON，不要输出额外解释，格式必须为："
+            "请只输出 JSON，不要输出额外解释，格式必须是："
             "{\"reply\":\"...\",\"tts_text\":\"...\",\"emotion\":\"neutral|smile|sad|angry|surprised\",\"action_intents\":[{\"type\":\"live2d_expression|live2d_motion|live2d_look_at|game_control\",\"payload\":{}}]}。"
             "reply 给 UI 展示；tts_text 给语音播报（可比 reply 更短）。"
-            "action_intents 可为空数组。"
+            "action_intents 可以为空数组。"
         ),
     )
     companion_tts_max_chars: int = int(os.getenv("COMPANION_TTS_MAX_CHARS", "120"))
@@ -109,25 +107,19 @@ class Settings:
         return self._default_persona_prompt
 
     def build_companion_system_prompt(self, persona_id: str, scene: str) -> str:
-        # Use explicit placeholder replacement so JSON braces in the template
-        # are treated as literal text rather than str.format fields.
         text = str(self.companion_system_prompt_template or "")
         return (
             text.replace("{persona_id}", persona_id or "default_companion")
             .replace("{scene}", scene or "desktop")
         )
 
-    # 对话历史
+    # History and memory
     history_max_rounds: int = int(os.getenv("HISTORY_MAX_ROUNDS", "6"))
-    # 记忆层
     memory_enabled: bool = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
     short_memory_rounds: int = int(os.getenv("SHORT_MEMORY_ROUNDS", "6"))
     long_memory_top_k: int = int(os.getenv("LONG_MEMORY_TOP_K", "5"))
     progress_top_k: int = int(os.getenv("PROGRESS_TOP_K", "5"))
-
-    # 偏好更新时间
     throttle_window_minutes: int = int(os.getenv("THROTTLE_WINDOW_MINUTES", "60"))
 
 
 settings = Settings()
-

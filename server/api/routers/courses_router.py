@@ -1,8 +1,8 @@
-from typing import Dict
+﻿from typing import Dict
 
 from fastapi import APIRouter, HTTPException
 
-from infra.repo import (
+from server.infra.repo import (
     create_course,
     delete_course,
     get_course,
@@ -10,7 +10,7 @@ from infra.repo import (
     list_documents,
     update_course,
 )
-from api.routers.schemas import (
+from server.api.routers.schemas import (
     CourseCreateRequest,
     CourseItem,
     CourseListResponse,
@@ -29,7 +29,7 @@ def api_create_course(payload: CourseCreateRequest) -> CourseItem:
         raw = get_course(cid)
         return CourseItem(**raw)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"创建课程失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鍒涘缓璇剧▼澶辫触: {exc}")
 
 
 @router.get("/courses", response_model=CourseListResponse)
@@ -39,7 +39,7 @@ def api_list_courses(owner_id: str = "default_user", limit: int = 50, offset: in
         items = [CourseItem(**r) for r in items_raw]
         return CourseListResponse(items=items, total=len(items))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"获取课程列表失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鑾峰彇璇剧▼鍒楄〃澶辫触: {exc}")
 
 
 @router.get("/courses/{course_id}", response_model=CourseItem)
@@ -52,7 +52,7 @@ def api_get_course(course_id: int) -> CourseItem:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"获取课程详情失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鑾峰彇璇剧▼璇︽儏澶辫触: {exc}")
 
 
 @router.put("/courses/{course_id}", response_model=CourseItem)
@@ -66,7 +66,7 @@ def api_update_course(course_id: int, payload: CourseUpdateRequest) -> CourseIte
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"更新课程失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鏇存柊璇剧▼澶辫触: {exc}")
 
 
 @router.delete("/courses/{course_id}")
@@ -79,7 +79,7 @@ def api_delete_course(course_id: int) -> Dict[str, object]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"删除课程失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鍒犻櫎璇剧▼澶辫触: {exc}")
 
 
 @router.get("/courses/{course_id}/materials", response_model=MaterialListResponse)
@@ -100,4 +100,5 @@ def api_list_course_materials(course_id: int, limit: int = 50, offset: int = 0) 
         ]
         return MaterialListResponse(items=items, total=len(items))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"获取课程资料失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"鑾峰彇璇剧▼璧勬枡澶辫触: {exc}")
+

@@ -56,7 +56,7 @@ $env:REMOTE_TIMEOUT_SEC='24'
 # $env:REMOTE_BACKUP_MODEL='Pro/deepseek-ai/DeepSeek-V3.2'
 python server.py
 
-# 前端启动（在 desktop-app 终端执行，不要带代理）
+# 前端启动（在 client 终端执行，不要带代理）
 Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
 Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
 $env:NO_PROXY='127.0.0.1,localhost,::1'

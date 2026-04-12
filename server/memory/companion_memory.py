@@ -1,10 +1,10 @@
-# companion_memory.py
+﻿# companion_memory.py
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, List
 
-from infra.repo import (
+from server.infra.repo import (
     list_user_preferences_by_prefix,
     list_learning_progress,
     list_user_reminders,
@@ -38,8 +38,8 @@ def extract_companion_memory_signals(user_text: str, session_id: str) -> List[Di
 
     signals: List[Dict[str, Any]] = []
 
-    # 偏好：称呼
-    m = re.search(r"叫我\s*([^\s，。！？,!?]{1,20})", text, flags=re.IGNORECASE)
+    # 鍋忓ソ锛氱О鍛?
+    m = re.search(r"鍙垜\s*([^\s锛屻€傦紒锛?!?]{1,20})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
@@ -50,8 +50,8 @@ def extract_companion_memory_signals(user_text: str, session_id: str) -> List[Di
             }
         )
 
-    # 偏好：语气
-    m = re.search(r"(用|保持)\s*([^\s，。！？,!?]{1,20})\s*(语气|风格)", text, flags=re.IGNORECASE)
+    # 鍋忓ソ锛氳姘?
+    m = re.search(r"(鐢▅淇濇寔)\s*([^\s锛屻€傦紒锛?!?]{1,20})\s*(璇皵|椋庢牸)", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
@@ -62,36 +62,36 @@ def extract_companion_memory_signals(user_text: str, session_id: str) -> List[Di
             }
         )
 
-    # 偏好：喜欢 / 不喜欢
-    m = re.search(r"我喜欢(.{1,40})", text, flags=re.IGNORECASE)
+    # 鍋忓ソ锛氬枩娆?/ 涓嶅枩娆?
+    m = re.search(r"鎴戝枩娆?.{1,40})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _pref_key("likes"),
-                "value": m.group(1).strip(" ，。!?！？"),
+                "value": m.group(1).strip(" 锛屻€??锛侊紵"),
                 "source": "companion_rule:likes",
                 "confidence": 0.82,
             }
         )
 
-    m = re.search(r"我不喜欢(.{1,40})", text, flags=re.IGNORECASE)
+    m = re.search(r"鎴戜笉鍠滄(.{1,40})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _pref_key("dislikes"),
-                "value": m.group(1).strip(" ，。!?！？"),
+                "value": m.group(1).strip(" 锛屻€??锛侊紵"),
                 "source": "companion_rule:dislikes",
                 "confidence": 0.88,
             }
         )
 
-    # 会话事实：最近在做什么
-    m = re.search(r"(我最近在|我现在在)(.{1,60})", text, flags=re.IGNORECASE)
+    # 浼氳瘽浜嬪疄锛氭渶杩戝湪鍋氫粈涔?
+    m = re.search(r"(鎴戞渶杩戝湪|鎴戠幇鍦ㄥ湪)(.{1,60})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _fact_key(session_id, "recent_focus"),
-                "value": m.group(2).strip(" ，。!?！？"),
+                "value": m.group(2).strip(" 锛屻€??锛侊紵"),
                 "source": "companion_rule:recent_focus",
                 "confidence": 0.78,
             }
@@ -188,7 +188,7 @@ def _tokenize(text: str) -> List[str]:
     t = _clean(text).lower()
     if not t:
         return []
-    return [x for x in re.split(r"[\s,，。！？!?.:：;；]+", t) if x]
+    return [x for x in re.split(r"[\s,，。！？；：,.!?;:]+", t) if x]
 
 
 def _overlap_score(query_text: str, item_text: str) -> float:

@@ -1,11 +1,11 @@
-import json
+﻿import json
 import logging
 import math
 from typing import Dict, List
 
 import requests
 
-from config.config import settings
+from server.config.config import settings
 
 
 def embed_text(text: str) -> List[float]:
@@ -59,7 +59,7 @@ def rank_chunks(query_vec: List[float], chunks: List[Dict], top_k: int = 5) -> L
 
 
 def embed_document_chunks(document_id: int, batch_size: int = 32) -> None:
-    from infra.db import get_conn
+    from server.infra.db import get_conn
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -86,3 +86,4 @@ def embed_document_chunks(document_id: int, batch_size: int = 32) -> None:
                         (json.dumps(emb), chunk_id),
                     )
                 conn.commit()
+

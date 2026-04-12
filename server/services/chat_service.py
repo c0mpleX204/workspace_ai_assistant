@@ -13,9 +13,9 @@ from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
-from config.config import settings
-from memory.memory_rules import RULES, normalize_pref_signal
-from infra.repo import (
+from server.config.config import settings
+from server.memory.memory_rules import RULES, normalize_pref_signal
+from server.infra.repo import (
     get_document_detail,
     list_chunks_with_embedding,
     list_chunks_with_embedding_multi,
@@ -25,9 +25,9 @@ from infra.repo import (
     upsert_learning_progress,
     upsert_user_preference,
 )
-from services.embedding_service import cosine_similarity, embed_text, rank_chunks
-from services.model_service import remote_stream_reply, smart_model_dispatch
-from services.web_search_service import web_search
+from server.services.embedding_service import cosine_similarity, embed_text, rank_chunks
+from server.services.model_service import remote_stream_reply, smart_model_dispatch
+from server.services.web_search_service import web_search
 
 SESSION_STORE: Dict[str, List[Dict[str, str]]] = {}
 LOG_HTML_PATH = Path("logs/error_logs.html")
