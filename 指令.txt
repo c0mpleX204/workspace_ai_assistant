@@ -54,11 +54,31 @@ $env:REMOTE_TIMEOUT_SEC='24'
 # $env:REMOTE_BACKUP_API_BASE_URL='https://api.siliconflow.cn/v1'
 # $env:REMOTE_BACKUP_API_KEY='你的备用key'
 # $env:REMOTE_BACKUP_MODEL='Pro/deepseek-ai/DeepSeek-V3.2'
+
+# =========================
+# 具体启动指令（按顺序执行）
+# =========================
+
+# 终端1：启动后端（项目根目录）
+Set-Location D:\LiMinglong\workspace_ai_assistant
+& .\.venv\Scripts\Activate.ps1
+Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
+Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+$env:NO_PROXY='127.0.0.1,localhost,::1'
 python server.py
 
-# 前端启动（在 client 终端执行，不要带代理）
+# 后端健康检查（另开终端执行，可选）
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -Method Get
+
+# 终端2：启动前端（client 目录）
+Set-Location D:\LiMinglong\workspace_ai_assistant\client
 Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
 Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
 $env:NO_PROXY='127.0.0.1,localhost,::1'
 $env:BACKEND_URL='http://127.0.0.1:8000'
-npm run dev   
+
+# 首次执行（只需一次）
+npm install
+
+# 日常启动
+npm run dev
