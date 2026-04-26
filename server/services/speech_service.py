@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 
 from server.config.config import settings
-from .text_utils import should_drop_stt_text
+from server.utils.text_utils import should_drop_stt_text
 
 _SHERPA_RECOGNIZER = None
 _SHERPA_LOCK = threading.Lock()

@@ -1,6 +1,6 @@
 from typing import Dict, Tuple
 
-from server.api.routers.schemas import CompanionActionIntent
+from server.api.schemas import CompanionActionIntent
 from server.services.game_control_service import execute_game_control
 
 

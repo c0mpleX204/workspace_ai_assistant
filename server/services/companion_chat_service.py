@@ -5,7 +5,7 @@ import re
 import time
 from typing import Dict, List, Optional
 
-from server.api.routers.schemas import CompanionActionIntent, CompanionChatRequest, CompanionChatResponse
+from server.api.schemas import CompanionActionIntent, CompanionChatRequest, CompanionChatResponse
 from server.config.config import settings
 from server.dialogue.companion_persona import (
     build_style_anchor,

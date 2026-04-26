@@ -1,7 +1,6 @@
 from datetime import datetime
 import logging
 import threading
-import time
 
 from server.infra.repo import list_due_reminders, mark_reminder_sent
 from server.services.model_service import warmup_model
@@ -29,7 +28,7 @@ def reminder_worker(
                         now,
                     )
                 except Exception as exc:
-                    logging.warning(f"鏍囪鎻愰啋宸插彂閫佸け璐? {exc}")
+                    logging.warning("mark reminder sent failed: %s", exc)
                 logging.info(
                     {
                         "action": "reminder_sent",
@@ -40,7 +39,7 @@ def reminder_worker(
                     }
                 )
         except Exception as exc:
-            logging.warning(f"鎻愰啋宸ヤ綔绾跨▼鍑洪敊: {exc}")
+            logging.warning("reminder worker failed: %s", exc)
         stop_event.wait(poll_interval_seconds)
 
 
@@ -68,7 +67,7 @@ def run_startup_tasks() -> None:
         _WORKER = thread
         logging.info("Reminder worker thread started.")
     except Exception as exc:
-        logging.warning(f"Failed to start reminder worker thread: {exc}")
+        logging.warning("Failed to start reminder worker thread: %s", exc)
 
 
 def shutdown_workers() -> None:
@@ -76,4 +75,3 @@ def shutdown_workers() -> None:
     thread = _WORKER
     if thread and thread.is_alive():
         thread.join(timeout=2)
-

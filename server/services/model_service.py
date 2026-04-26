@@ -5,7 +5,7 @@ from typing import Dict, Iterator, List
 import requests
 
 from server.config.config import settings
-from .text_utils import repair_mojibake_text
+from server.utils.text_utils import repair_mojibake_text
 
 
 def _build_remote_providers() -> List[Dict[str, str]]:

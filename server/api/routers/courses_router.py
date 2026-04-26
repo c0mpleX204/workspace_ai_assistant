@@ -10,7 +10,7 @@ from server.infra.repo import (
     list_documents,
     update_course,
 )
-from server.api.routers.schemas import (
+from server.api.schemas import (
     CourseCreateRequest,
     CourseItem,
     CourseListResponse,

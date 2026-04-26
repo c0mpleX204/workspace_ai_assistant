@@ -10,7 +10,7 @@ from server.api.routers.health_router import router as health_router
 from server.api.routers.materials_router import router as materials_router
 from server.api.routers.speech_router import router as speech_router
 from server.config.config import settings
-from server.services.startup_service import run_startup_tasks, shutdown_workers
+from server.runtime.startup import run_startup_tasks, shutdown_workers
 from server.services.companion_task_service import shutdown_task_pool
 from server.infra.db import close_pool
 

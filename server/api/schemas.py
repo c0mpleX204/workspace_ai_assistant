@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import UploadFile
 from pydantic import BaseModel, Field
 
 

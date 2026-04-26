@@ -3,7 +3,7 @@ from typing import Dict, List
 
 from fastapi import APIRouter, HTTPException
 
-from server.api.routers.schemas import (
+from server.api.schemas import (
     CompanionActRequest,
     CompanionActResponse,
     CompanionActionIntent,
