@@ -224,10 +224,10 @@ export default function Live2DViewer({ backgroundImageUrl = '' }) {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#eef6fb',
+    backgroundColor: '#f5f7fa',
     backgroundImage: bgUrl
-      ? `linear-gradient(rgba(243, 250, 255, 0.28), rgba(243, 250, 255, 0.28)), url("${bgUrl}")`
-      : 'radial-gradient(circle at 20% 20%, rgba(144, 214, 230, 0.32), transparent 45%), radial-gradient(circle at 85% 10%, rgba(166, 226, 211, 0.34), transparent 42%), linear-gradient(180deg, #f8fcff, #ecf5fb)',
+      ? `linear-gradient(rgba(245, 247, 250, 0.25), rgba(245, 247, 250, 0.25)), url("${bgUrl}")`
+      : 'radial-gradient(circle at 15% 20%, rgba(14, 165, 165, 0.08), transparent 48%), radial-gradient(circle at 85% 10%, rgba(99, 179, 237, 0.1), transparent 45%), linear-gradient(180deg, #fafcfd, #f0f4f8)',
     backgroundSize: bgUrl ? 'cover' : 'auto',
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
@@ -252,18 +252,22 @@ export default function Live2DViewer({ backgroundImageUrl = '' }) {
         onClick={() => setShowControls(v => !v)}
         style={{
           position: 'absolute',
-          left: buttonPos.x,
-          top: buttonPos.y,
-          width: 32,
-          height: 32,
+          left: buttonPos.x, top: buttonPos.y,
+          width: 30, height: 30,
           borderRadius: 999,
-          border: '1px solid #bed2e1',
-          background: 'rgba(255,255,255,0.9)',
-          color: '#245b76',
-          boxShadow: '0 8px 18px rgba(42, 101, 136, 0.22)',
+          border: '1px solid #e1e8ef',
+          background: 'rgba(255,255,255,0.88)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          color: '#435669',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
           cursor: 'grab',
           zIndex: 20,
           userSelect: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 14,
         }}
         title="拖拽/打开模型控制"
       >
@@ -274,100 +278,66 @@ export default function Live2DViewer({ backgroundImageUrl = '' }) {
         <div
           style={{
             position: 'absolute',
-            right: 12,
-            bottom: 12,
-            width: 260,
-            background: 'rgba(255, 255, 255, 0.92)',
-            border: '1px solid #d4e1eb',
-            borderRadius: 10,
-            padding: 10,
+            right: 12, bottom: 12,
+            width: 252,
+            background: 'rgba(255,255,255,0.94)',
+            border: '1px solid #e1e8ef',
+            borderRadius: 14,
+            padding: 14,
             zIndex: 19,
-            color: '#26445b',
+            color: '#0f1a2a',
             fontSize: 12,
-            boxShadow: '0 16px 32px rgba(53, 106, 137, 0.2)',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.1), 0 4px 12px rgba(0,0,0,0.06)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
           }}
         >
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>模型位置与显示</div>
+          <div style={{ marginBottom: 12, fontWeight: 600, fontSize: 13, letterSpacing: '-0.01em' }}>模型控制</div>
 
-          <label style={{ display: 'block', marginBottom: 6 }}>
-            缩放 {transform.scalePercent}%
-            <input
-              type="range"
-              min="40"
-              max="170"
-              value={transform.scalePercent}
-              onChange={e => handleTransformChange('scalePercent', Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
-          </label>
+          {[
+            { key: 'scalePercent', label: '缩放', min: 40, max: 170 },
+            { key: 'xPercent', label: '水平', min: 10, max: 90 },
+            { key: 'yPercent', label: '垂直', min: 20, max: 150 },
+            { key: 'opacityPercent', label: '透明度', min: 20, max: 100 },
+          ].map(({ key, label, min, max }) => (
+            <label key={key} style={{ display: 'block', marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                <span style={{ color: '#435669', fontSize: 11 }}>{label}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#7b8fa1' }}>{transform[key]}%</span>
+              </div>
+              <input
+                type="range"
+                min={min} max={max}
+                value={transform[key]}
+                onChange={e => handleTransformChange(key, Number(e.target.value))}
+                style={{
+                  width: '100%', height: 4,
+                  accentColor: '#0ea5a5',
+                  cursor: 'pointer',
+                }}
+              />
+            </label>
+          ))}
 
-          <label style={{ display: 'block', marginBottom: 6 }}>
-            水平 {transform.xPercent}%
-            <input
-              type="range"
-              min="10"
-              max="90"
-              value={transform.xPercent}
-              onChange={e => handleTransformChange('xPercent', Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
-          </label>
-
-          <label style={{ display: 'block', marginBottom: 10 }}>
-            垂直 {transform.yPercent}%
-            <input
-              type="range"
-              min="20"
-              max="150"
-              value={transform.yPercent}
-              onChange={e => handleTransformChange('yPercent', Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
-          </label>
-
-          <label style={{ display: 'block', marginBottom: 10 }}>
-            透明度 {transform.opacityPercent}%
-            <input
-              type="range"
-              min="20"
-              max="100"
-              value={transform.opacityPercent}
-              onChange={e => handleTransformChange('opacityPercent', Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
-          </label>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <button
-              type="button"
-              onClick={handleReset}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+            <button type="button" onClick={handleReset}
               style={{
-                flex: 1,
-                border: '1px solid #c8d9e6',
-                background: '#f6fbff',
-                color: '#2a556f',
-                borderRadius: 8,
-                padding: '5px 8px',
-                cursor: 'pointer',
+                flex: 1, border: '1px solid #e1e8ef',
+                background: '#f8fafc', color: '#435669',
+                borderRadius: 8, padding: '6px 8px',
+                cursor: 'pointer', fontSize: 12, fontWeight: 500,
+                fontFamily: 'inherit',
               }}
-            >
-              复位
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowControls(false)}
+            >复位</button>
+            <button type="button" onClick={() => setShowControls(false)}
               style={{
-                flex: 1,
-                border: '1px solid #c8d9e6',
-                background: '#f6fbff',
-                color: '#2a556f',
-                borderRadius: 8,
-                padding: '5px 8px',
-                cursor: 'pointer',
+                flex: 1, border: 'none',
+                background: '#0ea5a5', color: '#fff',
+                borderRadius: 8, padding: '6px 8px',
+                cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                fontFamily: 'inherit',
               }}
-            >
-              收起
-            </button>
+            >收起</button>
           </div>
         </div>
       )}

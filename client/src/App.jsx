@@ -14,20 +14,20 @@ function fileToDataUrl(file) {
   })
 }
 
-// ===== 图标 =====
-const IconChat = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>)
-const IconBook = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>)
-const IconSettings = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)
-const IconCompanion = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/><path d="M18.5 7.5l1.2-1.2M5.5 7.5L4.3 6.3"/></svg>)
-const IconImage = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>)
-const IconLogo = () => (<svg viewBox="0 0 16 16" fill="white"><path d="M8 1L1 5v6l7 4 7-4V5L8 1zm0 2.18L13 6.1v3.8L8 12.82 3 9.9V6.1L8 3.18z"/></svg>)
+// ===== Icons =====
+const IconChat = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>)
+const IconBook = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>)
+const IconSettings = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)
+const IconCompanion = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg>)
+const IconImage = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>)
+const IconLogo = () => (<svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7v10l10 5 10-5V7z"/><path d="M12 2v20"/><path d="M2 7l10 5 10-5"/></svg>)
 const IconMic = ({ active }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="15" height="15">
-    <rect x="9" y="2" width="6" height="12" rx="3"/>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" width="15" height="15" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="2" width="6" height="11" rx="3"/>
     <path d="M5 10a7 7 0 0 0 14 0"/>
-    <line x1="12" y1="19" x2="12" y2="22"/>
+    <line x1="12" y1="18" x2="12" y2="22"/>
     <line x1="9" y1="22" x2="15" y2="22"/>
-    {active && <circle cx="20" cy="4" r="3" fill="#ef4444" stroke="none"/>}
+    {active && <circle cx="20" cy="4" r="3" fill="#e5484d" stroke="none"/>}
   </svg>
 )
 
@@ -475,8 +475,8 @@ export default function App() {
 
   const SidebarNav = () => (
     <div className="sidebar">
-      <div className="sidebar-logo"><IconLogo /></div>
-      <button className={`sidebar-btn ${page==='courses'?'active':''}`} title="课程" onClick={() => setPage('courses')}><IconBook /></button>
+      <div className="sidebar-logo" title="校园学习助手"><IconLogo /></div>
+      <button className={`sidebar-btn ${page==='courses'?'active':''}`} title="我的课程" onClick={() => setPage('courses')}><IconBook /></button>
       <button className={`sidebar-btn ${page==='chat'?'active':''}`} title="自由对话" onClick={() => setPage('chat')}><IconChat /></button>
       <button className={`sidebar-btn ${page==='companion'?'active':''}`} title="持续对话" onClick={() => setPage('companion')}><IconCompanion /></button>
       <div className="sidebar-spacer" />
@@ -503,16 +503,21 @@ export default function App() {
       <div className="main">
         <div className="topbar">
           <span className="topbar-title">{page==='courses'?'我的课程':page==='chat'?'自由对话':page==='companion'?'持续对话':'设置'}</span>
-          {page==='chat' && useRetrieval && <span className="topbar-tag">检索</span>}
+          {page==='chat' && useRetrieval && <span className="topbar-tag">RAG</span>}
           {page==='chat' && useWebSearch && <span className="topbar-tag">联网</span>}
           <div className="topbar-spacer"/>
-          {(page==='chat' || page==='companion') && <span className={`topbar-status ${loading?'loading':''}`}>{loading?'生成中…':lastLatency?`${lastLatency} ms`:'ready'}</span>}
+          {(page==='chat' || page==='companion') && (
+            <span className={`topbar-status ${loading?'loading':''}`}>
+              {loading ? '生成中…' : lastLatency ? `${lastLatency}ms` : '就绪'}
+            </span>
+          )}
           {window.windowApi && (
             <button
               title={isMaximized ? '还原窗口' : '最大化'}
               onClick={() => window.windowApi.maximizeToggle()}
-              style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',fontSize:14,padding:'2px 8px',lineHeight:1,WebkitAppRegion:'no-drag'}}
-            >{isMaximized ? '⧇' : '□'}</button>
+              className="ghost-btn small"
+              style={{WebkitAppRegion:'no-drag',padding:'3px 8px',fontSize:14}}
+            >{isMaximized ? '⤡' : '□'}</button>
           )}
         </div>
 
@@ -536,7 +541,7 @@ export default function App() {
               <button className="ghost-btn small" onClick={clearCurrentChatThread} disabled={messages.length === 0}>清空当前</button>
             </div>
             <div className="chat-area">
-              {messages.length===0 && <div className="chat-empty"><div className="chat-empty-icon"><IconChat/></div><p>发送消息开始对话</p></div>}
+              {messages.length===0 && <div className="chat-empty"><div className="chat-empty-icon"><IconChat/></div><p>发送消息开始对话，支持图片和语音输入</p></div>}
               {messages.map((m,i)=><Message key={i} m={m} onImageClick={src => setLightboxSrc(src)} onTts={handleTtsPlay}/>)}
               {loading && <TypingIndicator/>}
               <div ref={messagesEndRef}/>
@@ -603,85 +608,72 @@ export default function App() {
           <div className="page-container">
             <div className="page-title">设置</div>
 
-            <div className="field-group">
-              <div className="field">
-                <label className="field-label">后端地址</label>
-                <input className="field-input" value={backendUrl} onChange={e=>setBackendUrl(e.target.value)} placeholder="http://127.0.0.1:8000"/>
-              </div>
-              <div className="field">
-                <label className="field-label">用户 ID</label>
-                <input className="field-input" value={userId} onChange={e=>setUserId(e.target.value)} placeholder="user1"/>
-              </div>
-            </div>
-
-            <div className="field-group">
-              <div className="settings-section-title">前端显示</div>
-              <div className="field">
-                <label className="field-label">Live2D 背景图 URL（下方窗口）</label>
-                <div className="field-row">
-                  <input
-                    className="field-input"
-                    value={live2dBgUrl}
-                    onChange={e => setLive2dBgUrl(e.target.value)}
-                    placeholder="https://... 或 /images/bg.jpg"
-                  />
-                  <button
-                    className="ghost-btn"
-                    onClick={() => setLive2dBgUrl('')}
-                    title="清空并恢复默认背景"
-                  >
-                    清空
-                  </button>
+            <div className="settings-card">
+              <div className="settings-card-title">服务连接</div>
+              <div className="field-group">
+                <div className="field">
+                  <label className="field-label">后端地址</label>
+                  <input className="field-input" value={backendUrl} onChange={e=>setBackendUrl(e.target.value)} placeholder="http://127.0.0.1:8000"/>
+                </div>
+                <div className="field">
+                  <label className="field-label">用户 ID</label>
+                  <input className="field-input" value={userId} onChange={e=>setUserId(e.target.value)} placeholder="user1"/>
                 </div>
               </div>
             </div>
 
-            <div className="field-group">
-              <div className="settings-section-title">语音 / 音频设备</div>
-              <div className="field">
-                <label className="field-label">麦克风（音频输入）</label>
-                <div className="field-row">
-                  <select
-                    className="field-input field-select"
-                    value={selectedAudioInput}
-                    onChange={e => setSelectedAudioInput(e.target.value)}
-                  >
-                    <option value="">-- 系统默认 --</option>
-                    {audioInputs.map(d => (
-                      <option key={d.deviceId} value={d.deviceId}>
-                        {d.label || `麦克风 ${d.deviceId.slice(0,8)}`}
-                      </option>
+            <div className="settings-card">
+              <div className="settings-card-title">显示</div>
+              <div className="field-group">
+                <div className="field">
+                  <label className="field-label">Live2D 背景图 URL</label>
+                  <div className="field-row">
+                    <input
+                      className="field-input"
+                      value={live2dBgUrl}
+                      onChange={e => setLive2dBgUrl(e.target.value)}
+                      placeholder="https://... 或留空使用默认背景"
+                    />
+                    <button className="ghost-btn" onClick={() => setLive2dBgUrl('')} title="恢复默认背景">清空</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-card">
+              <div className="settings-card-title">音频设备</div>
+              <div className="field-group">
+                <div className="field">
+                  <label className="field-label">麦克风（输入）</label>
+                  <div className="field-row">
+                    <select className="field-input field-select" value={selectedAudioInput} onChange={e => setSelectedAudioInput(e.target.value)}>
+                      <option value="">系统默认</option>
+                      {audioInputs.map(d => (
+                        <option key={d.deviceId} value={d.deviceId}>{d.label || `麦克风 ${d.deviceId.slice(0,8)}`}</option>
+                      ))}
+                    </select>
+                    <button className="ghost-btn" onClick={requestMicPermission} title="授权后可显示设备名称">授权</button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="field-label">扬声器（输出）</label>
+                  <select className="field-input field-select" value={selectedAudioOutput} onChange={e => setSelectedAudioOutput(e.target.value)}>
+                    <option value="">系统默认</option>
+                    {audioOutputs.map(d => (
+                      <option key={d.deviceId} value={d.deviceId}>{d.label || `扬声器 ${d.deviceId.slice(0,8)}`}</option>
                     ))}
                   </select>
-                  <button className="ghost-btn" onClick={requestMicPermission} title="授权后可看到设备名称">
-                    授权麦克风
+                </div>
+                <div className="field">
+                  <label className="field-label">AI 回复朗读（TTS）</label>
+                  <button
+                    className={`retrieval-toggle${ttsEnabled?' active':''}`}
+                    onClick={() => setTtsEnabled(v => !v)}
+                    style={{alignSelf:'flex-start'}}
+                  >
+                    {ttsEnabled ? '已开启' : '已关闭'}
                   </button>
                 </div>
-              </div>
-              <div className="field">
-                <label className="field-label">扬声器 / 耳机（音频输出）</label>
-                <select
-                  className="field-input field-select"
-                  value={selectedAudioOutput}
-                  onChange={e => setSelectedAudioOutput(e.target.value)}
-                >
-                  <option value="">-- 系统默认 --</option>
-                  {audioOutputs.map(d => (
-                    <option key={d.deviceId} value={d.deviceId}>
-                      {d.label || `扬声器 ${d.deviceId.slice(0,8)}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label className="field-label">AI 回复朗读（TTS）</label>
-                <button
-                  className={`retrieval-toggle${ttsEnabled?' active':''}`}
-                  onClick={() => setTtsEnabled(v => !v)}
-                  style={{alignSelf:'flex-start'}}
-                >
-                  {ttsEnabled ? '🔊 已开启' : '🔇 已关闭'}
-                </button>
               </div>
             </div>
           </div>

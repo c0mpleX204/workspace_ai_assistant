@@ -1129,7 +1129,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
           <div className="companion-card-head">
             <div>
               <div className="companion-title">持续对话</div>
-              <div className="companion-subtitle">本地语音识别 + 本地优先语音播报</div>
+              <div className="companion-subtitle">实时语音识别 + 流式语音播报</div>
             </div>
             <div className="companion-head-controls">
               <select
@@ -1157,8 +1157,11 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
           <div className="chat-area companion-chat-area" ref={chatAreaRef}>
             {messages.length === 0 && (
               <div className="chat-empty">
-                <div className="chat-empty-icon">🗣️</div>
+                <div className="chat-empty-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22" strokeWidth="1.5"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="9" y1="22" x2="15" y2="22"/></svg>
+                </div>
                 <p>打开麦克风即可持续语音对话</p>
+                <span style={{fontSize:'12px',color:'var(--text-muted)'}}>按 Y 键快速开关麦克风</span>
               </div>
             )}
 

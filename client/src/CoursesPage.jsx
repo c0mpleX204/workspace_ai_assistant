@@ -83,7 +83,8 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
       {courses.length === 0 && (
         <div className="courses-empty">
           <div className="courses-empty-icon">📚</div>
-          <p>还没有课程，点击「新建课程」开始吧</p>
+          <p>还没有课程</p>
+          <span style={{color:'var(--text-muted)',fontSize:'13px'}}>点击右上角「新建课程」开始添加</span>
         </div>
       )}
 

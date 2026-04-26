@@ -282,7 +282,12 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
         {previewDocId ? (
           <iframe className="preview-iframe" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1`} title="preview" />
         ) : (
-          <div className="preview-empty">点击左侧资料名称开始预览</div>
+          <div className="preview-empty">
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>📄</div>
+              <div>点击左侧资料名称开始预览</div>
+            </div>
+          </div>
         )}
       </div>
 
@@ -303,7 +308,9 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
           <div className="chat-area">
             {messages.length === 0 && (
               <div className="chat-empty">
-                <div className="chat-empty-icon">💬</div>
+                <div className="chat-empty-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22" strokeWidth="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                </div>
                 <p>{useRetrieval ? `基于 ${selectedIds.size} 份资料对话` : '勾选左侧资料开启 RAG，或直接发消息'}</p>
               </div>
             )}
