@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import math
 import os
 from io import BytesIO
@@ -18,8 +18,8 @@ router = APIRouter(tags=["speech"])
 WS_STT_PCM_SAMPLE_RATE = max(8000, int(os.getenv("STT_WS_PCM_SAMPLE_RATE", "16000")))
 WS_STT_VAD_START_RMS = float(os.getenv("STT_WS_VAD_START_RMS", "0.014"))
 WS_STT_VAD_END_RMS = float(os.getenv("STT_WS_VAD_END_RMS", "0.009"))
-WS_STT_VAD_START_HOLD_FRAMES = max(1, int(os.getenv("STT_WS_VAD_START_HOLD_FRAMES", "2")))
-WS_STT_VAD_END_HOLD_FRAMES = max(1, int(os.getenv("STT_WS_VAD_END_HOLD_FRAMES", "3")))
+VAD_START_HOLD = max(1, int(os.getenv("STT_WS_VAD_START_HOLD_FRAMES", "2")))
+VAD_END_HOLD = max(1, int(os.getenv("STT_WS_VAD_END_HOLD_FRAMES", "3")))
 WS_STT_MIN_SPEECH_MS = max(80, int(os.getenv("STT_WS_MIN_SPEECH_MS", "240")))
 WS_STT_MAX_SPEECH_MS = max(1200, int(os.getenv("STT_WS_MAX_SPEECH_MS", "12000")))
 WS_STT_MIN_PCM_BYTES = max(320, int(os.getenv("STT_WS_MIN_PCM_BYTES", "640")))
@@ -59,7 +59,7 @@ class _RealtimePcmVadSession:
             else:
                 self.start_hits = 0
 
-            if self.start_hits >= WS_STT_VAD_START_HOLD_FRAMES:
+            if self.start_hits >= VAD_START_HOLD:
                 self.in_speech = True
                 self.start_hits = 0
                 self.end_hits = 0
@@ -80,7 +80,7 @@ class _RealtimePcmVadSession:
             self.trailing_silence_chunks = []
 
         should_close = False
-        if self.end_hits >= WS_STT_VAD_END_HOLD_FRAMES:
+        if self.end_hits >= VAD_END_HOLD:
             should_close = True
             if self.trailing_silence_chunks:
                 silence_samples = sum(len(x) // 2 for x in self.trailing_silence_chunks)
@@ -153,7 +153,7 @@ async def api_stt(file: UploadFile = File(...)) -> Dict[str, str]:
     try:
         audio_bytes = await file.read()
         if not audio_bytes:
-            raise HTTPException(status_code=400, detail="闊抽鏂囦欢涓虹┖")
+            raise HTTPException(status_code=400, detail="音频文件为空")
         text = await run_in_threadpool(
             speech_to_text,
             audio_bytes,
@@ -166,7 +166,7 @@ async def api_stt(file: UploadFile = File(...)) -> Dict[str, str]:
         logging.error(
             f"stt failed filename={file.filename} size={len(audio_bytes) if 'audio_bytes' in locals() else 0}: {exc}"
         )
-        raise HTTPException(status_code=500, detail=f"璇煶璇嗗埆澶辫触: {exc}")
+        raise HTTPException(status_code=500, detail=f"语音识别失败: {exc}")
 
 
 @router.websocket("/stt/ws")
@@ -247,7 +247,7 @@ async def api_stt_ws(websocket: WebSocket) -> None:
                 await websocket.send_json(
                     {
                         "type": "error",
-                        "message": f"璇煶璇嗗埆澶辫触: {exc}",
+                        "message": f"语音识别失败: {exc}",
                     }
                 )
     except WebSocketDisconnect:
@@ -272,5 +272,5 @@ async def api_tts(payload: TTSRequest) -> FastAPIResponse:
             headers={"Content-Disposition": f"inline; filename=tts.{ext}"},
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"璇煶鍚堟垚澶辫触: {exc}")
+        raise HTTPException(status_code=500, detail=f"语音合成失败: {exc}")
 

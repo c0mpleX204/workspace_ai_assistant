@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { chatApi, companionChatApi, companionTaskPollApi } from './api'
-import Live2DViewer from './Live2DViewer'
+
+const Live2DViewer = lazy(() => import('./Live2DViewer'))
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -45,20 +46,20 @@ function Message({ m }) {
 export default function CompanionChatPage({ backendUrl, userId, sessionId, selectedAudioInput, selectedAudioOutput, live2dBgUrl, showToast }) {
   const preferLocalTts = false
   const STT_SLICE_MS = 500
-  const MIC_GATE_OPEN_LEVEL = 30
-  const MIC_GATE_CLOSE_LEVEL = 20
-  const MIC_GATE_HOLD_MS = 900
-  const UTTERANCE_SILENCE_FLUSH_MS = 780
+  const MIC_OPEN = 30
+  const MIC_CLOSE = 20
+  const MIC_HOLD_MS = 900
+  const SILENCE_MS = 780
   const UTTERANCE_MIN_MS = 320
   const UTTERANCE_MAX_MS = 2300
-  const STT_TRANSCRIPT_MERGE_PAUSE_MS = 900
-  const STT_TRANSCRIPT_MAX_BUFFER_MS = 4200
+  const MERGE_PAUSE_MS = 900
+  const MERGE_MAX_MS = 4200
   const STT_QUEUE_MAX = 6
-  const WS_PCM_TARGET_SAMPLE_RATE = 16000
-  const WS_PCM_PROCESSOR_BUFFER_SIZE = 2048
-  const COMPANION_HISTORY_SEND_MAX = 16
-  const COMPANION_VISIBLE_MESSAGES_MAX = 100
-  const companionHistoryStorageKey = useMemo(
+  const PCM_RATE = 16000
+  const PCM_BUF_SIZE = 2048
+  const HISTORY_SEND_MAX = 16
+  const VISIBLE_MAX = 100
+  const historyKey = useMemo(
     () => `companion_chat_history_v1:${userId || 'user1'}:${sessionId || 'default'}`,
     [userId, sessionId],
   )
@@ -84,16 +85,16 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
   const volumeAvgRef = useRef(0)
   const voiceActiveRef = useRef(false)
   const voiceHoldUntilRef = useRef(0)
-  const voiceGateLoggedStateRef = useRef(false)
+  const voiceLoggedRef = useRef(false)
   const slicePeakLevelRef = useRef(0)
   const utteranceChunksRef = useRef([])
-  const utteranceStartedAtRef = useRef(0)
-  const utteranceLastVoiceAtRef = useRef(0)
+  const uttStartRef = useRef(0)
+  const uttVoiceAtRef = useRef(0)
   const utterancePeakRef = useRef(0)
   const inputMuteUntilRef = useRef(0)
   const mediaRecorderRef = useRef(null)
-  const mediaRecorderSliceTimerRef = useRef(null)
-  const recorderStartedLoggedRef = useRef(false)
+  const sliceTimerRef = useRef(null)
+  const recStartedRef = useRef(false)
   const sttBusyRef = useRef(false)
   const sttFailCountRef = useRef(0)
   const sttQueueRef = useRef([])
@@ -102,21 +103,21 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
   const useBackendSttRef = useRef(true)
   const sttSocketRef = useRef(null)
   const sttSocketReadyRef = useRef(false)
-  const sttSocketIntentionalCloseRef = useRef(false)
-  const sttSocketFlushResolverRef = useRef(null)
+  const sttIntentCloseRef = useRef(false)
+  const sttFlushResolveRef = useRef(null)
   const sttSocketPausedRef = useRef(false)
-  const sttTranscriptBufferRef = useRef('')
-  const sttTranscriptBufferStartedAtRef = useRef(0)
-  const sttTranscriptMergeTimerRef = useRef(null)
+  const sttTextBufRef = useRef('')
+  const sttBufStartRef = useRef(0)
+  const sttMergeTimerRef = useRef(null)
   const micSourceRef = useRef(null)
   const pcmProcessorRef = useRef(null)
   const pcmMuteNodeRef = useRef(null)
 
   const chatQueueRef = useRef([])
   const chatBusyRef = useRef(false)
-  const delegatedTaskIdRef = useRef('')
-  const delegatedPollTimerRef = useRef(null)
-  const delegatedPollBusyRef = useRef(false)
+  const taskIdRef = useRef('')
+  const taskPollTimerRef = useRef(null)
+  const taskPollBusyRef = useRef(false)
 
   const ttsQueueRef = useRef([])
   const ttsPlayingRef = useRef(false)
@@ -145,49 +146,49 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     return raw
   }
 
-  function clearSttTranscriptMergeTimer() {
-    if (sttTranscriptMergeTimerRef.current) {
-      clearTimeout(sttTranscriptMergeTimerRef.current)
-      sttTranscriptMergeTimerRef.current = null
+  function clearMergeTimer() {
+    if (sttMergeTimerRef.current) {
+      clearTimeout(sttMergeTimerRef.current)
+      sttMergeTimerRef.current = null
     }
   }
 
-  function flushMergedSttTranscript(reason = 'pause') {
-    const merged = String(sttTranscriptBufferRef.current || '').trim()
-    clearSttTranscriptMergeTimer()
-    sttTranscriptBufferRef.current = ''
-    sttTranscriptBufferStartedAtRef.current = 0
+  function flushSttText(reason = 'pause') {
+    const merged = String(sttTextBufRef.current || '').trim()
+    clearMergeTimer()
+    sttTextBufRef.current = ''
+    sttBufStartRef.current = 0
     if (!merged) return
     pushLog('speech', `合并语音(${reason}): ${merged}`)
     enqueueMessage(merged, [], 'stt')
   }
 
-  function appendSttTranscriptChunk(text) {
+  function appendSttChunk(text) {
     const chunk = String(text || '').trim()
     if (!chunk) return
 
     const now = Date.now()
-    const previous = String(sttTranscriptBufferRef.current || '').trim()
+    const previous = String(sttTextBufRef.current || '').trim()
     if (!previous) {
-      sttTranscriptBufferRef.current = chunk
-      sttTranscriptBufferStartedAtRef.current = now
+      sttTextBufRef.current = chunk
+      sttBufStartRef.current = now
     } else {
       const needSpace = /[A-Za-z0-9]$/.test(previous) && /^[A-Za-z0-9]/.test(chunk)
-      sttTranscriptBufferRef.current = `${previous}${needSpace ? ' ' : ''}${chunk}`
+      sttTextBufRef.current = `${previous}${needSpace ? ' ' : ''}${chunk}`
     }
 
     if (
-      sttTranscriptBufferStartedAtRef.current > 0 &&
-      now - sttTranscriptBufferStartedAtRef.current >= STT_TRANSCRIPT_MAX_BUFFER_MS
+      sttBufStartRef.current > 0 &&
+      now - sttBufStartRef.current >= MERGE_MAX_MS
     ) {
-      flushMergedSttTranscript('max_window')
+      flushSttText('max_window')
       return
     }
 
-    clearSttTranscriptMergeTimer()
-    sttTranscriptMergeTimerRef.current = setTimeout(() => {
-      flushMergedSttTranscript('silence')
-    }, STT_TRANSCRIPT_MERGE_PAUSE_MS)
+    clearMergeTimer()
+    sttMergeTimerRef.current = setTimeout(() => {
+      flushSttText('silence')
+    }, MERGE_PAUSE_MS)
   }
 
   useEffect(() => {
@@ -205,7 +206,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
   const canSend = useMemo(() => (input.trim() || pendingImages.length > 0) && !loading, [input, pendingImages, loading])
   const visibleMessages = useMemo(
-    () => messages.slice(-COMPANION_VISIBLE_MESSAGES_MAX),
+    () => messages.slice(-VISIBLE_MAX),
     [messages],
   )
   const pushLog = useCallback((type, text) => {
@@ -214,7 +215,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(companionHistoryStorageKey)
+      const raw = localStorage.getItem(historyKey)
       if (!raw) {
         setMessages([])
         return
@@ -237,22 +238,22 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       void e
       setMessages([])
     }
-  }, [companionHistoryStorageKey])
+  }, [historyKey])
 
   useEffect(() => {
     try {
-      localStorage.setItem(companionHistoryStorageKey, JSON.stringify(messages))
+      localStorage.setItem(historyKey, JSON.stringify(messages))
     } catch (e) {
       // If quota is hit, keep newer messages first.
       try {
         const trimmed = messages.slice(-Math.max(200, Math.floor(messages.length * 0.7)))
-        localStorage.setItem(companionHistoryStorageKey, JSON.stringify(trimmed))
+        localStorage.setItem(historyKey, JSON.stringify(trimmed))
       } catch (inner) {
         void inner
       }
       void e
     }
-  }, [messages, companionHistoryStorageKey])
+  }, [messages, historyKey])
 
   useEffect(() => {
     const isEditableTarget = (target) => {
@@ -312,7 +313,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       const url = buildSttWsUrl()
       const socket = new WebSocket(url)
       socket.binaryType = 'arraybuffer'
-      sttSocketIntentionalCloseRef.current = false
+      sttIntentCloseRef.current = false
 
       let settled = false
       const done = (ok) => {
@@ -348,8 +349,8 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         }
 
         if (payload.type === 'flush_complete') {
-          const resolver = sttSocketFlushResolverRef.current
-          sttSocketFlushResolverRef.current = null
+          const resolver = sttFlushResolveRef.current
+          sttFlushResolveRef.current = null
           if (typeof resolver === 'function') resolver()
           return
         }
@@ -359,13 +360,13 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
           if (text) {
             sttFailCountRef.current = 0
             pushLog('speech', `识别文本: ${text}`)
-            appendSttTranscriptChunk(text)
+            appendSttChunk(text)
           }
           return
         }
 
         if (payload.type === 'speech_start') {
-          clearSttTranscriptMergeTimer()
+          clearMergeTimer()
           setSpeechStatus('listening')
           return
         }
@@ -387,11 +388,11 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       }
 
       socket.onclose = () => {
-        const intentional = sttSocketIntentionalCloseRef.current
+        const intentional = sttIntentCloseRef.current
         sttSocketRef.current = null
         sttSocketReadyRef.current = false
-        const resolver = sttSocketFlushResolverRef.current
-        sttSocketFlushResolverRef.current = null
+        const resolver = sttFlushResolveRef.current
+        sttFlushResolveRef.current = null
         if (typeof resolver === 'function') resolver()
         clearTimeout(timer)
         if (!intentional) {
@@ -410,14 +411,14 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     if (flushFirst && ws.readyState === WebSocket.OPEN) {
       try {
         await new Promise(resolve => {
-          sttSocketFlushResolverRef.current = resolve
+          sttFlushResolveRef.current = resolve
           ws.send('flush')
           setTimeout(resolve, 700)
         })
       } catch (e) { void e }
     }
 
-    sttSocketIntentionalCloseRef.current = true
+    sttIntentCloseRef.current = true
     try { ws.close() } catch (e) { void e }
     sttSocketRef.current = null
     sttSocketReadyRef.current = false
@@ -452,7 +453,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     return out
   }
 
-  function stopRealtimePcmStreaming() {
+  function stopPcmStream() {
     if (pcmProcessorRef.current) {
       try { pcmProcessorRef.current.onaudioprocess = null } catch (e) { void e }
       try { pcmProcessorRef.current.disconnect() } catch (e) { void e }
@@ -465,13 +466,13 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     sttSocketPausedRef.current = false
   }
 
-  function startRealtimePcmStreaming(sourceNode, audioContext) {
+  function startPcmStream(sourceNode, audioContext) {
     if (!sourceNode || !audioContext) return false
     if (typeof audioContext.createScriptProcessor !== 'function') return false
 
-    stopRealtimePcmStreaming()
+    stopPcmStream()
 
-    const processor = audioContext.createScriptProcessor(WS_PCM_PROCESSOR_BUFFER_SIZE, 1, 1)
+    const processor = audioContext.createScriptProcessor(PCM_BUF_SIZE, 1, 1)
     const mute = audioContext.createGain()
     mute.gain.value = 0
 
@@ -495,8 +496,8 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       const input = event.inputBuffer.getChannelData(0)
       const downsampled = downsampleFloat32(
         input,
-        Number(audioContext.sampleRate || WS_PCM_TARGET_SAMPLE_RATE),
-        WS_PCM_TARGET_SAMPLE_RATE,
+        Number(audioContext.sampleRate || PCM_RATE),
+        PCM_RATE,
       )
       const pcm = float32ToInt16(downsampled)
       if (!pcm || pcm.length < 160) return
@@ -511,7 +512,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       processor.connect(mute)
       mute.connect(audioContext.destination)
     } catch (e) {
-      stopRealtimePcmStreaming()
+      stopPcmStream()
       return false
     }
 
@@ -531,16 +532,16 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
   function resetUtteranceBuffer() {
     utteranceChunksRef.current = []
-    utteranceStartedAtRef.current = 0
-    utteranceLastVoiceAtRef.current = 0
+    uttStartRef.current = 0
+    uttVoiceAtRef.current = 0
     utterancePeakRef.current = 0
   }
 
-  function flushUtteranceToQueue(reason = 'silence') {
+  function flushUtterance(reason = 'silence') {
     const chunks = utteranceChunksRef.current
     if (!chunks || chunks.length === 0) return
 
-    const started = utteranceStartedAtRef.current || Date.now()
+    const started = uttStartRef.current || Date.now()
     const durationMs = Math.max(0, Date.now() - started)
     const mimeType = chunks[0]?.type || 'audio/webm'
     const blob = new Blob(chunks, { type: mimeType })
@@ -552,7 +553,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     }
 
     // Drop weak low-energy clips to reduce noise hallucinations.
-    if (peak < MIC_GATE_OPEN_LEVEL + 3) {
+    if (peak < MIC_OPEN + 3) {
       return
     }
 
@@ -582,8 +583,8 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
     recorder.onstart = () => {
       setSpeechStatus('listening')
-      if (!recorderStartedLoggedRef.current) {
-        recorderStartedLoggedRef.current = true
+      if (!recStartedRef.current) {
+        recStartedRef.current = true
         pushLog('speech', `语音切片监听已开启（后端STT，${STT_SLICE_MS}ms/片）`)
       }
     }
@@ -601,11 +602,11 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
     mediaRecorderRef.current = recorder
     try { recorder.start() } catch (e) { void e; return false }
-    if (mediaRecorderSliceTimerRef.current) {
-      clearInterval(mediaRecorderSliceTimerRef.current)
-      mediaRecorderSliceTimerRef.current = null
+    if (sliceTimerRef.current) {
+      clearInterval(sliceTimerRef.current)
+      sliceTimerRef.current = null
     }
-    mediaRecorderSliceTimerRef.current = setInterval(() => {
+    sliceTimerRef.current = setInterval(() => {
       if (!micEnabled || !useBackendSttRef.current) return
       const mr = mediaRecorderRef.current
       if (!mr || mr.state !== 'recording') return
@@ -678,15 +679,15 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     }
   }
 
-  function stopDelegatedTaskPolling() {
-    if (delegatedPollTimerRef.current) {
-      clearInterval(delegatedPollTimerRef.current)
-      delegatedPollTimerRef.current = null
+  function stopTaskPolling() {
+    if (taskPollTimerRef.current) {
+      clearInterval(taskPollTimerRef.current)
+      taskPollTimerRef.current = null
     }
-    delegatedPollBusyRef.current = false
+    taskPollBusyRef.current = false
   }
 
-  async function handleDelegatedTaskFinished(task) {
+  async function finishTask(task) {
     const status = String(task?.status || '').toLowerCase()
     const ok = status === 'completed' && task?.ok !== false
     const summary = repairMojibakeText(String(task?.summary || '').trim())
@@ -712,47 +713,47 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     await speak(summary || notifyText)
   }
 
-  async function pollDelegatedTaskOnce() {
-    if (delegatedPollBusyRef.current) return
-    if (!delegatedTaskIdRef.current) return
+  async function pollTaskOnce() {
+    if (taskPollBusyRef.current) return
+    if (!taskIdRef.current) return
 
-    delegatedPollBusyRef.current = true
+    taskPollBusyRef.current = true
     try {
       const resp = await companionTaskPollApi(
         backendUrl,
         {
           user_id: userId,
           session_id: `companion_${sessionId}`,
-          task_id: delegatedTaskIdRef.current,
+          task_id: taskIdRef.current,
         },
         { timeoutMs: 6000 },
       )
 
       const task = resp?.task
-      if (!task || String(task.task_id || '') !== delegatedTaskIdRef.current) return
+      if (!task || String(task.task_id || '') !== taskIdRef.current) return
 
       const status = String(task.status || '').toLowerCase()
-      if (status === 'completed' || status === 'failed') {
-        delegatedTaskIdRef.current = ''
-        stopDelegatedTaskPolling()
-        await handleDelegatedTaskFinished(task)
+      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+        taskIdRef.current = ''
+        stopTaskPolling()
+        await finishTask(task)
       }
     } catch (e) {
       pushLog('error', '后台任务轮询失败: ' + String(e?.message || e || 'unknown'))
     } finally {
-      delegatedPollBusyRef.current = false
+      taskPollBusyRef.current = false
     }
   }
 
-  function startDelegatedTaskPolling(taskId) {
+  function startTaskPolling(taskId) {
     const id = String(taskId || '').trim()
     if (!id) return
-    delegatedTaskIdRef.current = id
-    stopDelegatedTaskPolling()
-    delegatedPollTimerRef.current = setInterval(() => {
-      pollDelegatedTaskOnce()
+    taskIdRef.current = id
+    stopTaskPolling()
+    taskPollTimerRef.current = setInterval(() => {
+      pollTaskOnce()
     }, 1800)
-    pollDelegatedTaskOnce()
+    pollTaskOnce()
   }
 
   async function sendMessageNow(text, images = []) {
@@ -769,7 +770,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         .filter(m => (m.role === 'user' || m.role === 'assistant') && !m.streaming)
         .map(m => ({ role: m.role, content: String(m.content || '').trim() }))
         .filter(m => m.content)
-        .slice(-COMPANION_HISTORY_SEND_MAX)
+        .slice(-HISTORY_SEND_MAX)
 
       const currentUserContent = content || '请分析这张图片'
       const apiMessages = [...historyMessages, { role: 'user', content: currentUserContent }]
@@ -806,7 +807,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         pushLog('output', reply.slice(0, 80))
         if (delegatedTaskId) {
           pushLog('speech', `后台任务已启动: ${delegatedTaskId.slice(0, 8)}...`)
-          startDelegatedTaskPolling(delegatedTaskId)
+          startTaskPolling(delegatedTaskId)
         }
         if (resp?.emotion) {
           pushLog('speech', `情绪: ${resp.emotion}`)
@@ -881,30 +882,30 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     }
 
     const now = Date.now()
-    const voiceTriggered = voiceActiveRef.current || peakLevel >= MIC_GATE_OPEN_LEVEL
+    const voiceTriggered = voiceActiveRef.current || peakLevel >= MIC_OPEN
     if (voiceTriggered) {
-      if (!utteranceStartedAtRef.current && peakLevel < MIC_GATE_OPEN_LEVEL + 2) {
+      if (!uttStartRef.current && peakLevel < MIC_OPEN + 2) {
         return
       }
-      if (!utteranceStartedAtRef.current) {
-        utteranceStartedAtRef.current = now
+      if (!uttStartRef.current) {
+        uttStartRef.current = now
       }
-      utteranceLastVoiceAtRef.current = now
+      uttVoiceAtRef.current = now
       utterancePeakRef.current = Math.max(utterancePeakRef.current, peakLevel || 0)
       utteranceChunksRef.current.push(blob)
 
-      if (now - utteranceStartedAtRef.current >= UTTERANCE_MAX_MS) {
-        flushUtteranceToQueue('max')
+      if (now - uttStartRef.current >= UTTERANCE_MAX_MS) {
+        flushUtterance('max')
       }
       return
     }
 
     if (
       utteranceChunksRef.current.length > 0 &&
-      utteranceLastVoiceAtRef.current > 0 &&
-      now - utteranceLastVoiceAtRef.current >= UTTERANCE_SILENCE_FLUSH_MS
+      uttVoiceAtRef.current > 0 &&
+      now - uttVoiceAtRef.current >= SILENCE_MS
     ) {
-      flushUtteranceToQueue('silence')
+      flushUtterance('silence')
     }
   }
 
@@ -931,7 +932,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       sttFailCountRef.current = 0
       if (text) {
         pushLog('speech', `识别文本: ${text}`)
-        appendSttTranscriptChunk(text)
+        appendSttChunk(text)
       }
       setSpeechStatus('listening')
     } catch (e) {
@@ -982,17 +983,22 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
   }
 
   function stopMic() {
-    flushMergedSttTranscript('stop_mic')
-    if (mediaRecorderSliceTimerRef.current) {
-      clearInterval(mediaRecorderSliceTimerRef.current)
-      mediaRecorderSliceTimerRef.current = null
+    flushSttText('stop_mic')
+    if (sliceTimerRef.current) {
+      clearInterval(sliceTimerRef.current)
+      sliceTimerRef.current = null
     }
     const mr = mediaRecorderRef.current
+    if (mr) {
+      try { mr.ondataavailable = null } catch (e) { void e }
+      try { mr.onstop = null } catch (e) { void e }
+      try { mr.onerror = null } catch (e) { void e }
+    }
     if (mr && mr.state !== 'inactive') {
       try { mr.stop() } catch (e) { void e }
     }
     mediaRecorderRef.current = null
-    stopRealtimePcmStreaming()
+    stopPcmStream()
     if (micSourceRef.current) {
       try { micSourceRef.current.disconnect() } catch (e) { void e }
     }
@@ -1009,7 +1015,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     sttQueueWorkingRef.current = false
     sttBackoffUntilRef.current = 0
     sttFailCountRef.current = 0
-    recorderStartedLoggedRef.current = false
+    recStartedRef.current = false
     inputMuteUntilRef.current = 0
     resetUtteranceBuffer()
     useBackendSttRef.current = true
@@ -1019,7 +1025,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     volumeAvgRef.current = 0
     voiceActiveRef.current = false
     voiceHoldUntilRef.current = 0
-    voiceGateLoggedStateRef.current = false
+    voiceLoggedRef.current = false
     slicePeakLevelRef.current = 0
     setMicLevel(0)
     setSpeechStatus('idle')
@@ -1054,19 +1060,19 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         const level = Math.min(100, Math.round(avg * 1.6))
         const now = Date.now()
 
-        if (level >= MIC_GATE_OPEN_LEVEL) {
+        if (level >= MIC_OPEN) {
           voiceActiveRef.current = true
-          voiceHoldUntilRef.current = now + MIC_GATE_HOLD_MS
-        } else if (voiceActiveRef.current && level <= MIC_GATE_CLOSE_LEVEL && now > voiceHoldUntilRef.current) {
+          voiceHoldUntilRef.current = now + MIC_HOLD_MS
+        } else if (voiceActiveRef.current && level <= MIC_CLOSE && now > voiceHoldUntilRef.current) {
           voiceActiveRef.current = false
         }
 
-        if (voiceActiveRef.current !== voiceGateLoggedStateRef.current) {
-          voiceGateLoggedStateRef.current = voiceActiveRef.current
+        if (voiceActiveRef.current !== voiceLoggedRef.current) {
+          voiceLoggedRef.current = voiceActiveRef.current
           if (voiceActiveRef.current) {
-            pushLog('speech', `检测到语音输入（音量阈值>${MIC_GATE_OPEN_LEVEL}）`)
+            pushLog('speech', `检测到语音输入（音量阈值>${MIC_OPEN}）`)
           } else {
-            flushUtteranceToQueue('silence')
+            flushUtterance('silence')
           }
         }
 
@@ -1080,6 +1086,8 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       const backendOk = await checkBackendHealth()
       if (!backendOk) {
         pushLog('error', '后端STT不可用，请先启动后端服务')
+        stopMic()
+        setMicEnabled(false)
         setSpeechStatus('error')
         return
       }
@@ -1092,7 +1100,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         return
       }
 
-      const pcmOk = startRealtimePcmStreaming(sourceNode, ac)
+      const pcmOk = startPcmStream(sourceNode, ac)
       if (!pcmOk) {
         pushLog('error', '实时PCM采集不可用，已回退HTTP识别')
         useBackendSttRef.current = true
@@ -1106,6 +1114,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       showToast('麦克风启动失败: ' + e.message, 'error')
       pushLog('error', '麦克风启动失败: ' + e.message)
       stopMic()
+      setMicEnabled(false)
     }
   }
 
@@ -1117,8 +1126,8 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
   useEffect(() => {
     return () => {
-      stopDelegatedTaskPolling()
-      clearSttTranscriptMergeTimer()
+      stopTaskPolling()
+      clearMergeTimer()
     }
   }, [])
 
@@ -1296,7 +1305,9 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
 
         <div className="companion-right companion-bottom">
           <div className="companion-card" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            <Live2DViewer backgroundImageUrl={live2dBgUrl} />
+            <Suspense fallback={null}>
+              <Live2DViewer backgroundImageUrl={live2dBgUrl} />
+            </Suspense>
           </div>
         </div>
       </div>

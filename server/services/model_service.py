@@ -1,4 +1,4 @@
-﻿import json
+import json
 import time
 from typing import Dict, Iterator, List
 
@@ -39,7 +39,7 @@ def _build_remote_providers() -> List[Dict[str, str]]:
     return providers
 
 
-def _remote_generate_reply_by_provider(
+def _remote_provider_reply(
     messages: List[Dict[str, str]],
     provider: Dict[str, str],
     model_override: str | None = None,
@@ -117,7 +117,7 @@ def _remote_generate_reply(
     errors: List[str] = []
     for provider in providers:
         try:
-            return _remote_generate_reply_by_provider(
+            return _remote_provider_reply(
                 messages,
                 provider,
                 model_override=model_override,
@@ -159,7 +159,7 @@ def _has_image(input_data: dict) -> bool:
     return False
 
 
-def _inject_image_into_messages(messages: List[Dict[str, str]], image_url: str) -> List[Dict]:
+def _inject_images(messages: List[Dict[str, str]], image_url: str) -> List[Dict]:
     if not image_url:
         return messages
     msgs = [dict(m) for m in messages]
@@ -189,20 +189,20 @@ def _inject_image_into_messages(messages: List[Dict[str, str]], image_url: str) 
     return msgs
 
 
-def _remote_generate_reply_vision(
+def _remote_vision_reply(
     messages: List[Dict],
     image_url: str,
     model_override: str | None = None,
     generation: Dict[str, object] | None = None,
 ) -> Dict[str, object]:
-    msgs_with_image = _inject_image_into_messages(messages, image_url)
+    msgs_with_image = _inject_images(messages, image_url)
     vision_provider = {
         "name": "vision",
         "api_base_url": settings.remote_primary_api_base_url,
         "api_key": settings.remote_primary_api_key,
         "model": settings.remote_vision_model,
     }
-    return _remote_generate_reply_by_provider(
+    return _remote_provider_reply(
         msgs_with_image,
         vision_provider,
         model_override=model_override,
@@ -290,7 +290,7 @@ def smart_model_dispatch(input_data: dict) -> dict:
     generation = input_data.get("generation")
 
     if image_url or _has_image(input_data):
-        return _remote_generate_reply_vision(
+        return _remote_vision_reply(
             messages,
             image_url,
             model_override=model_override,

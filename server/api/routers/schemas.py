@@ -125,7 +125,7 @@ class CompanionTaskPollRequest(BaseModel):
     task_id: Optional[str] = None
 
 
-class CompanionTaskPollResponse(BaseModel):
+class TaskPollResponse(BaseModel):
     ok: bool = True
     task: Dict[str, Any] | None = None
 

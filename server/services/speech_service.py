@@ -1,4 +1,4 @@
-﻿import base64
+import base64
 import io
 import os
 import threading
@@ -17,7 +17,7 @@ _SHERPA_LOCK = threading.Lock()
 _SHERPA_INIT_ERROR = None
 
 
-def _resolve_sherpa_model_paths() -> tuple[Path, Path]:
+def _sherpa_paths() -> tuple[Path, Path]:
     root_dir = str(getattr(settings, "local_stt_sherpa_model_dir", "") or "").strip()
     model_file_name = str(getattr(settings, "local_stt_sherpa_model_file", "model.int8.onnx") or "model.int8.onnx").strip()
     tokens_file_name = str(getattr(settings, "local_stt_sherpa_tokens_file", "tokens.txt") or "tokens.txt").strip()
@@ -64,7 +64,7 @@ def _get_sherpa_recognizer():
             raise _SHERPA_INIT_ERROR from exc
 
         try:
-            model_path, tokens_path = _resolve_sherpa_model_paths()
+            model_path, tokens_path = _sherpa_paths()
             _SHERPA_RECOGNIZER = sherpa_onnx.OfflineRecognizer.from_sense_voice(
                 model=str(model_path),
                 tokens=str(tokens_path),
@@ -145,7 +145,7 @@ def _read_wav_samples(audio_bytes: bytes, target_sample_rate: int) -> list[float
     return _resample(samples, sample_rate, target_sample_rate)
 
 
-def _speech_to_text_local_sherpa_sense_voice(
+def _stt_sherpa(
     audio_bytes: bytes, filename: str = "audio.wav", language: str = "zh"
 ) -> str:
     _ = language
@@ -240,7 +240,7 @@ def speech_to_text(audio_bytes: bytes, filename: str = "audio.webm", language: s
         getattr(settings, "stt_provider", "sherpa_sense_voice") or "sherpa_sense_voice"
     ).lower()
     if provider in {"sherpa_sense_voice", "local_sherpa", "local"}:
-        return _speech_to_text_local_sherpa_sense_voice(
+        return _stt_sherpa(
             audio_bytes=audio_bytes,
             filename=filename,
             language=language,
@@ -261,7 +261,7 @@ def speech_to_text(audio_bytes: bytes, filename: str = "audio.webm", language: s
                 language=language,
             )
         except Exception:
-            return _speech_to_text_local_sherpa_sense_voice(
+            return _stt_sherpa(
                 audio_bytes=audio_bytes,
                 filename=filename,
                 language=language,
@@ -269,7 +269,7 @@ def speech_to_text(audio_bytes: bytes, filename: str = "audio.webm", language: s
 
     if provider in {"auto_local_first"}:
         try:
-            return _speech_to_text_local_sherpa_sense_voice(
+            return _stt_sherpa(
                 audio_bytes=audio_bytes,
                 filename=filename,
                 language=language,
@@ -282,7 +282,7 @@ def speech_to_text(audio_bytes: bytes, filename: str = "audio.webm", language: s
             )
 
     raise RuntimeError(
-        "鏈煡 STT_PROVIDER銆傚彲鐢ㄥ€硷細sherpa_sense_voice | remote_openai_compatible | auto_remote_first | auto_local_first"
+        "未知 STT_PROVIDER。可用值：sherpa_sense_voice | remote_openai_compatible | auto_remote_first | auto_local_first"
     )
 
 

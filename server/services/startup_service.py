@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 import logging
 import threading
 import time
@@ -7,8 +7,16 @@ from server.infra.repo import list_due_reminders, mark_reminder_sent
 from server.services.model_service import warmup_model
 
 
-def reminder_worker(poll_interval_seconds: int = 60, window_minutes: int = 60) -> None:
-    while True:
+_STOP = threading.Event()
+_WORKER: threading.Thread | None = None
+
+
+def reminder_worker(
+    stop_event: threading.Event,
+    poll_interval_seconds: int = 60,
+    window_minutes: int = 60,
+) -> None:
+    while not stop_event.is_set():
         try:
             due = list_due_reminders(window_minutes=window_minutes)
             now = datetime.utcnow()
@@ -33,23 +41,39 @@ def reminder_worker(poll_interval_seconds: int = 60, window_minutes: int = 60) -
                 )
         except Exception as exc:
             logging.warning(f"鎻愰啋宸ヤ綔绾跨▼鍑洪敊: {exc}")
-        time.sleep(poll_interval_seconds)
+        stop_event.wait(poll_interval_seconds)
 
 
 def run_startup_tasks() -> None:
+    global _WORKER
     try:
         warmup_model()
     except Exception as exc:
         print(f"[startup] warmup failed: {exc}")
 
     try:
+        if _WORKER and _WORKER.is_alive():
+            return
+        _STOP.clear()
         thread = threading.Thread(
             target=reminder_worker,
-            kwargs={"poll_interval_seconds": 60, "window_minutes": 60},
+            kwargs={
+                "stop_event": _STOP,
+                "poll_interval_seconds": 60,
+                "window_minutes": 60,
+            },
             daemon=True,
         )
         thread.start()
+        _WORKER = thread
         logging.info("Reminder worker thread started.")
     except Exception as exc:
         logging.warning(f"Failed to start reminder worker thread: {exc}")
+
+
+def shutdown_workers() -> None:
+    _STOP.set()
+    thread = _WORKER
+    if thread and thread.is_alive():
+        thread.join(timeout=2)
 

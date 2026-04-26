@@ -1,4 +1,4 @@
-﻿from typing import Dict
+from typing import Dict
 
 from fastapi import APIRouter, HTTPException
 
@@ -83,7 +83,7 @@ def api_delete_course(course_id: int) -> Dict[str, object]:
 
 
 @router.get("/courses/{course_id}/materials", response_model=MaterialListResponse)
-def api_list_course_materials(course_id: int, limit: int = 50, offset: int = 0) -> MaterialListResponse:
+def list_course_materials(course_id: int, limit: int = 50, offset: int = 0) -> MaterialListResponse:
     try:
         items_raw = list_documents(course_id=course_id, limit=limit, offset=offset)
         items = [

@@ -1,4 +1,4 @@
-﻿import threading
+import threading
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -9,10 +9,10 @@ from fastapi.responses import FileResponse
 from server.services.parser import parse_document
 from server.infra.repo import (
     create_document,
-    delete_document_with_chunks,
+    delete_doc_chunks,
     get_document_detail,
     insert_chunks,
-    list_chunks_with_embedding,
+    list_chunks_emb,
     list_documents,
 )
 from server.api.routers.schemas import (
@@ -131,7 +131,7 @@ def get_material(document_id: int) -> MaterialDetail:
 @router.delete("/materials/{document_id}", response_model=MaterialDeleteResponse)
 def delete_material(document_id: int) -> MaterialDeleteResponse:
     try:
-        ok = delete_document_with_chunks(document_id)
+        ok = delete_doc_chunks(document_id)
         if not ok:
             raise HTTPException(status_code=404, detail="资料不存在")
         return MaterialDeleteResponse(ok=True, document_id=document_id)
@@ -166,7 +166,7 @@ def api_view_material(document_id: int):
 def search_materials(payload: SearchRequest) -> SearchResponse:
     try:
         query_vec = embed_text(payload.query)
-        candidates = list_chunks_with_embedding(
+        candidates = list_chunks_emb(
             document_id=payload.document_id,
             limit=payload.candidate_limit,
         )

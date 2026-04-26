@@ -106,7 +106,7 @@ class Settings:
             pass
         return self._default_persona_prompt
 
-    def build_companion_system_prompt(self, persona_id: str, scene: str) -> str:
+    def build_companion_prompt(self, persona_id: str, scene: str) -> str:
         text = str(self.companion_system_prompt_template or "")
         return (
             text.replace("{persona_id}", persona_id or "default_companion")

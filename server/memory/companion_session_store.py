@@ -7,10 +7,10 @@ import re
 import threading
 from typing import Dict, List
 
-DEFAULT_COMPANION_HISTORY_MAX_MESSAGES = int(
+DEFAULT_HISTORY_MAX = int(
     os.getenv("COMPANION_HISTORY_MAX_MESSAGES", "24")
 )
-DEFAULT_COMPANION_SESSION_DIR = Path(
+SESSION_DIR = Path(
     os.getenv("COMPANION_SESSION_DIR", "data/companion_sessions")
 )
 
@@ -37,12 +37,12 @@ def _sanitize_session_id(session_id: str) -> str:
 
 
 def _session_file_path(session_id: str) -> Path:
-    session_dir = DEFAULT_COMPANION_SESSION_DIR
+    session_dir = SESSION_DIR
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir / f"{_sanitize_session_id(session_id)}.json"
 
 
-def _normalize_dialog_messages(messages: List[Dict[str, object]]) -> List[Dict[str, str]]:
+def normalize_msgs(messages: List[Dict[str, object]]) -> List[Dict[str, str]]:
     normalized: List[Dict[str, str]] = []
     for item in messages or []:
         role = _normalize_role(item.get("role"))
@@ -62,10 +62,10 @@ def _dedup_adjacent(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return result
 
 
-def load_companion_session_history(
+def load_session(
     session_id: str,
     *,
-    limit: int = DEFAULT_COMPANION_HISTORY_MAX_MESSAGES,
+    limit: int = DEFAULT_HISTORY_MAX,
 ) -> List[Dict[str, str]]:
     path = _session_file_path(session_id)
     if not path.exists():
@@ -84,19 +84,19 @@ def load_companion_session_history(
     if not isinstance(messages, list):
         return []
 
-    normalized = _normalize_dialog_messages(messages)
+    normalized = normalize_msgs(messages)
     max_messages = max(2, int(limit))
     return _dedup_adjacent(normalized)[-max_messages:]
 
 
-def save_companion_session_history(
+def save_session(
     session_id: str,
     messages: List[Dict[str, object]],
     *,
-    limit: int = DEFAULT_COMPANION_HISTORY_MAX_MESSAGES,
+    limit: int = DEFAULT_HISTORY_MAX,
 ) -> List[Dict[str, str]]:
     max_messages = max(2, int(limit))
-    normalized = _normalize_dialog_messages(messages)
+    normalized = normalize_msgs(messages)
     normalized = _dedup_adjacent(normalized)[-max_messages:]
 
     path = _session_file_path(session_id)
@@ -124,7 +124,7 @@ def save_companion_session_history(
     return normalized
 
 
-def load_companion_compressed_summary(session_id: str) -> str:
+def load_summary(session_id: str) -> str:
     path = _session_file_path(session_id)
     if not path.exists():
         return ""
@@ -140,7 +140,7 @@ def load_companion_compressed_summary(session_id: str) -> str:
     return str(payload.get("compressed_summary", "")).strip()
 
 
-def save_companion_compressed_summary(session_id: str, summary: str) -> None:
+def save_summary(session_id: str, summary: str) -> None:
     path = _session_file_path(session_id)
     normalized_summary = str(summary or "").strip()
 
@@ -157,7 +157,7 @@ def save_companion_compressed_summary(session_id: str, summary: str) -> None:
         payload["session_id"] = _sanitize_session_id(session_id)
         raw_messages = payload.get("messages", [])
         messages = raw_messages if isinstance(raw_messages, list) else []
-        payload["messages"] = _normalize_dialog_messages(messages)
+        payload["messages"] = normalize_msgs(messages)
         payload["compressed_summary"] = normalized_summary
         path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -165,15 +165,15 @@ def save_companion_compressed_summary(session_id: str, summary: str) -> None:
         )
 
 
-def merge_companion_dialog_history(
+def merge_dialog(
     session_id: str,
     incoming_messages: List[Dict[str, object]],
     *,
-    limit: int = DEFAULT_COMPANION_HISTORY_MAX_MESSAGES,
+    limit: int = DEFAULT_HISTORY_MAX,
 ) -> List[Dict[str, str]]:
     max_messages = max(2, int(limit))
-    incoming = _normalize_dialog_messages(incoming_messages)
-    stored = load_companion_session_history(session_id, limit=max_messages)
+    incoming = normalize_msgs(incoming_messages)
+    stored = load_session(session_id, limit=max_messages)
 
     # If frontend already sends multi-turn history, treat it as authoritative.
     if len(incoming) >= 2:

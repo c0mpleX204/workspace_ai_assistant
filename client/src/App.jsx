@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { chatApi } from './api'
 import CoursesPage from './CoursesPage'
 import CourseChatPage from './CourseChatPage'
-import CompanionChatPage from './CompanionChatPage'
 import './styles.css'
+
+const CompanionChatPage = lazy(() => import('./CompanionChatPage'))
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -168,21 +169,21 @@ function TypingIndicator() {
   )
 }
 
-const CHAT_THREAD_STORAGE_PREFIX = 'desktop_chat_threads_v1:'
-const CHAT_THREAD_DEFAULT_TITLE = '新对话'
+const THREAD_KEY_PREFIX = 'desktop_chat_threads_v1:'
+const THREAD_DEFAULT_TITLE = '新对话'
 
 function buildChatThreadTitle(messages) {
   const firstUser = (messages || []).find(x => x?.role === 'user' && String(x?.content || '').trim())
-  if (!firstUser) return CHAT_THREAD_DEFAULT_TITLE
+  if (!firstUser) return THREAD_DEFAULT_TITLE
   const text = String(firstUser.content || '').trim().replace(/\s+/g, ' ')
-  return text.slice(0, 18) || CHAT_THREAD_DEFAULT_TITLE
+  return text.slice(0, 18) || THREAD_DEFAULT_TITLE
 }
 
 function createChatThread(id = '') {
   const now = Date.now()
   return {
     id: id || `chat_${now}_${Math.random().toString(36).slice(2, 8)}`,
-    title: CHAT_THREAD_DEFAULT_TITLE,
+    title: THREAD_DEFAULT_TITLE,
     messages: [],
     createdAt: now,
     updatedAt: now,
@@ -208,12 +209,12 @@ function normalizeChatThreads(raw) {
 
 // ===== 主应用 =====
 export default function App() {
-  const LIVE2D_BG_STORAGE_KEY = 'desktop_live2d_bg_url_v1'
+  const LIVE2D_BG_KEY = 'desktop_live2d_bg_url_v1'
   const [backendUrl, setBackendUrl] = useState(() => window.env?.BACKEND_URL || 'http://127.0.0.1:8000')
   const [userId, setUserId] = useState('user1')
   const [sessionId] = useState('default')
   const [chatThreads, setChatThreads] = useState(() => [createChatThread('chat_default')])
-  const [activeChatThreadId, setActiveChatThreadId] = useState('chat_default')
+  const [activeThreadId, setActiveChatThreadId] = useState('chat_default')
   const [page, setPage] = useState('courses')
   const [activeCourse, setActiveCourse] = useState(null)
   const [input, setInput] = useState('')
@@ -233,7 +234,7 @@ export default function App() {
   // TTS 朗读开关
   const [ttsEnabled, setTtsEnabled] = useState(false)
   const [live2dBgUrl, setLive2dBgUrl] = useState(() => {
-    try { return localStorage.getItem(LIVE2D_BG_STORAGE_KEY) || '' } catch { return '' }
+    try { return localStorage.getItem(LIVE2D_BG_KEY) || '' } catch { return '' }
   })
   const [isMaximized, setIsMaximized] = useState(false)
 
@@ -243,23 +244,23 @@ export default function App() {
   const { toast, show: showToast } = useToast()
   const { listening, startListening, stopListening } = useSpeechInput(backendUrl, selectedAudioInput)
 
-  const chatThreadStorageKey = useMemo(
-    () => `${CHAT_THREAD_STORAGE_PREFIX}${userId || 'user1'}`,
+  const threadStoreKey = useMemo(
+    () => `${THREAD_KEY_PREFIX}${userId || 'user1'}`,
     [userId],
   )
-  const activeChatThread = useMemo(
-    () => chatThreads.find(x => x.id === activeChatThreadId) || chatThreads[0] || createChatThread('chat_default'),
-    [chatThreads, activeChatThreadId],
+  const activeThread = useMemo(
+    () => chatThreads.find(x => x.id === activeThreadId) || chatThreads[0] || createChatThread('chat_default'),
+    [chatThreads, activeThreadId],
   )
-  const messages = activeChatThread?.messages || []
-  const chatThreadsSorted = useMemo(
+  const messages = activeThread?.messages || []
+  const sortedThreads = useMemo(
     () => [...chatThreads].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)),
     [chatThreads],
   )
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(chatThreadStorageKey)
+      const raw = localStorage.getItem(threadStoreKey)
       const parsed = raw ? JSON.parse(raw) : []
       const normalized = normalizeChatThreads(parsed)
       if (normalized.length > 0) {
@@ -276,19 +277,19 @@ export default function App() {
       setChatThreads([first])
       setActiveChatThreadId(first.id)
     }
-  }, [chatThreadStorageKey])
+  }, [threadStoreKey])
 
   useEffect(() => {
     try {
-      localStorage.setItem(chatThreadStorageKey, JSON.stringify(chatThreads))
+      localStorage.setItem(threadStoreKey, JSON.stringify(chatThreads))
     } catch (e) {
       void e
     }
-  }, [chatThreadStorageKey, chatThreads])
+  }, [threadStoreKey, chatThreads])
 
   useEffect(() => {
     try {
-      localStorage.setItem(LIVE2D_BG_STORAGE_KEY, String(live2dBgUrl || '').trim())
+      localStorage.setItem(LIVE2D_BG_KEY, String(live2dBgUrl || '').trim())
     } catch (e) {
       void e
     }
@@ -296,7 +297,7 @@ export default function App() {
 
   const setMessages = useCallback((updater) => {
     setChatThreads(prev => prev.map(thread => {
-      if (thread.id !== activeChatThreadId) return thread
+      if (thread.id !== activeThreadId) return thread
       const current = Array.isArray(thread.messages) ? thread.messages : []
       const nextMessages = typeof updater === 'function' ? updater(current) : updater
       return {
@@ -306,9 +307,9 @@ export default function App() {
         updatedAt: Date.now(),
       }
     }))
-  }, [activeChatThreadId])
+  }, [activeThreadId])
 
-  function createNewChatThread() {
+  function newThread() {
     const thread = createChatThread()
     setChatThreads(prev => [thread, ...prev])
     setActiveChatThreadId(thread.id)
@@ -317,12 +318,12 @@ export default function App() {
     setLastLatency(null)
   }
 
-  function clearCurrentChatThread() {
+  function clearThread() {
     setMessages(() => [])
     setLastLatency(null)
   }
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading, activeChatThreadId])
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading, activeThreadId])
   useEffect(() => {
     const ta = textareaRef.current; if (!ta) return
     ta.style.height = 'auto'
@@ -383,7 +384,7 @@ export default function App() {
     try {
       const payload = {
         user_id: userId,
-        session_id: activeChatThreadId,
+        session_id: activeThreadId,
         messages: [userMsg],
         use_retrieval: useRetrieval,
         use_web_search: useWebSearch,
@@ -528,17 +529,17 @@ export default function App() {
             <div className="chat-thread-bar">
               <select
                 className="chat-thread-select"
-                value={activeChatThreadId}
+                value={activeThreadId}
                 onChange={e => setActiveChatThreadId(e.target.value)}
               >
-                {chatThreadsSorted.map(t => (
+                {sortedThreads.map(t => (
                   <option key={t.id} value={t.id}>
-                    {t.title || CHAT_THREAD_DEFAULT_TITLE}
+                    {t.title || THREAD_DEFAULT_TITLE}
                   </option>
                 ))}
               </select>
-              <button className="ghost-btn small" onClick={createNewChatThread}>+ 新对话</button>
-              <button className="ghost-btn small" onClick={clearCurrentChatThread} disabled={messages.length === 0}>清空当前</button>
+              <button className="ghost-btn small" onClick={newThread}>+ 新对话</button>
+              <button className="ghost-btn small" onClick={clearThread} disabled={messages.length === 0}>清空当前</button>
             </div>
             <div className="chat-area">
               {messages.length===0 && <div className="chat-empty"><div className="chat-empty-icon"><IconChat/></div><p>发送消息开始对话，支持图片和语音输入</p></div>}
@@ -594,15 +595,17 @@ export default function App() {
 
 
         {page==='companion' && (
-          <CompanionChatPage
-            backendUrl={backendUrl}
-            userId={userId}
-            sessionId={sessionId}
-            selectedAudioInput={selectedAudioInput}
-            selectedAudioOutput={selectedAudioOutput}
-            live2dBgUrl={live2dBgUrl}
-            showToast={showToast}
-          />
+          <Suspense fallback={null}>
+            <CompanionChatPage
+              backendUrl={backendUrl}
+              userId={userId}
+              sessionId={sessionId}
+              selectedAudioInput={selectedAudioInput}
+              selectedAudioOutput={selectedAudioOutput}
+              live2dBgUrl={live2dBgUrl}
+              showToast={showToast}
+            />
+          </Suspense>
         )}
         {page==='settings' && (
           <div className="page-container">

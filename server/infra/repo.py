@@ -1,4 +1,4 @@
-﻿from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 from server.infra.db import get_conn
 
 
@@ -104,7 +104,7 @@ def delete_course(course_id: int) -> bool:
             return cur.rowcount > 0
 
 
-def list_chunks_with_embedding_multi(
+def list_chunks_emb_multi(
     document_ids: List[int],
     limit: int = 2000,
 ) -> List[Dict[str, Any]]:
@@ -138,7 +138,7 @@ def list_chunks_with_embedding_multi(
         for r in rows
     ]
 
-def list_chunks_with_embedding(document_id:int | None =None,limit:int=2000)->list[dict[str,Any]]:
+def list_chunks_emb(document_id:int | None =None,limit:int=2000)->list[dict[str,Any]]:
     sql = """
     select c.id as chunk_id, c.document_id,c.content,
     c.embedding,c.page_no,d.title as document_title
@@ -300,7 +300,7 @@ def get_document_detail(document_id: int) -> dict[str, Any] | None:
         "chunk_count": int(row[6] or 0),
     }
 
-def delete_document_with_chunks(document_id: int) -> bool:
+def delete_doc_chunks(document_id: int) -> bool:
     with get_conn() as conn:
         with conn.cursor() as cur:
             # 鍏堝垹瀛愯〃锛岄伩鍏嶆病鏈夐厤缃骇鑱旂害鏉熸椂鎶ュ閿敊璇?
@@ -339,7 +339,7 @@ def list_user_preferences(user_id: str, limit: int = 50) -> List[Dict[str, Any]]
     return result
 
 
-def get_user_preference_by_key(user_id: str, key: str) -> Optional[Dict[str, Any]]:
+def get_user_pref(user_id: str, key: str) -> Optional[Dict[str, Any]]:
     sql = """
     select pref_key, pref_value, source, confidence, updated_at
     from user_preferences
@@ -365,7 +365,7 @@ def get_user_preference_by_key(user_id: str, key: str) -> Optional[Dict[str, Any
     }
 
 
-def list_user_preferences_by_prefix(
+def list_user_prefs(
     user_id: str,
     key_prefix: str,
     limit: int = 50,

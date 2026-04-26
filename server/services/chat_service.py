@@ -17,8 +17,8 @@ from server.config.config import settings
 from server.memory.memory_rules import RULES, normalize_pref_signal
 from server.infra.repo import (
     get_document_detail,
-    list_chunks_with_embedding,
-    list_chunks_with_embedding_multi,
+    list_chunks_emb,
+    list_chunks_emb_multi,
     list_learning_progress,
     list_user_preferences,
     list_user_reminders,
@@ -117,7 +117,7 @@ def get_short_term_memory(
     }
 
 
-def build_memory_context_text(
+def build_memory_text(
     short_mem: Dict[str, object],
     pref_items: List[Dict[str, object]],
     progress_items: List[Dict[str, object]],
@@ -466,7 +466,7 @@ def retrieve_chunks_for_chat(
         return []
 
     query_vec = embed_text(q)
-    candidates = list_chunks_with_embedding(document_id=document_id, limit=candidate_limit)
+    candidates = list_chunks_emb(document_id=document_id, limit=candidate_limit)
     if not candidates:
         return []
     ranked = rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
@@ -518,7 +518,7 @@ def build_retrieval_context(chunks: List[Dict[str, object]]) -> str:
     return "\n".join(lines).strip()
 
 
-def inject_retrieval_as_system(messages: List[Dict[str, str]], context_text: str) -> List[Dict[str, str]]:
+def add_recall_ctx(messages: List[Dict[str, str]], context_text: str) -> List[Dict[str, str]]:
     text = context_text.strip()
     if not text:
         return messages
@@ -549,7 +549,7 @@ def retrieve_chunks_multi(
     if not document_ids or not query.strip():
         return []
     query_vec = embed_text(query.strip())
-    candidates = list_chunks_with_embedding_multi(document_ids=document_ids, limit=candidate_limit)
+    candidates = list_chunks_emb_multi(document_ids=document_ids, limit=candidate_limit)
     if not candidates:
         return []
     return rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
@@ -567,7 +567,7 @@ def build_web_context(results: List[Dict[str, object]]) -> str:
     return "\n".join(lines).strip()
 
 
-def inject_web_context_as_system(messages: List[Dict[str, str]], web_context: str) -> List[Dict[str, str]]:
+def add_web_ctx(messages: List[Dict[str, str]], web_context: str) -> List[Dict[str, str]]:
     if not web_context.strip():
         return messages
     web_msg = {
@@ -598,7 +598,7 @@ def _build_input_data(payload: Any, final_messages: List[Dict[str, str]]) -> Dic
     return input_data
 
 
-def _build_user_error_message(msg: str) -> tuple[str, str]:
+def _user_error_msg(msg: str) -> tuple[str, str]:
     if "http 429" in msg or "rate-limited" in msg:
         return "当前请求较多，我这边有点忙，稍后再试一下。", "RATE_LIMIT"
     if "timeout" in msg.lower() or "timed out" in msg:
@@ -612,7 +612,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
     start = time.time()
     session_id = payload.session_id.strip() if payload.session_id else "default"
     retrieved_chunks: List[Dict[str, object]] = []
-    retrieval_context = ""
+    recall_ctx = ""
     try:
         if not session_id:
             session_id = "default"
@@ -661,7 +661,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         except Exception as exc:
             logging.warning(f"获取用户提醒失败: {exc}")
 
-        memory_text = build_memory_context_text(
+        memory_text = build_memory_text(
             short_mem=short_mem,
             pref_items=pref_items,
             progress_items=progress_items,
@@ -710,7 +710,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
                     top_k=20,
                     candidate_limit=2000,
                 )
-            retrieval_context = build_retrieval_context(retrieved_chunks)
+            recall_ctx = build_retrieval_context(retrieved_chunks)
 
         web_context = ""
         if payload.use_web_search:
@@ -723,10 +723,10 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         final_messages = inject_system_prompt(merged_messages)
         if settings.memory_enabled:
             final_messages = inject_memory_as_system(final_messages, memory_text)
-        if retrieval_context:
-            final_messages = inject_retrieval_as_system(final_messages, retrieval_context)
+        if recall_ctx:
+            final_messages = add_recall_ctx(final_messages, recall_ctx)
         if web_context:
-            final_messages = inject_web_context_as_system(final_messages, web_context)
+            final_messages = add_web_ctx(final_messages, web_context)
 
         input_data = _build_input_data(payload, final_messages)
         result = await run_in_threadpool(smart_model_dispatch, input_data)
@@ -749,7 +749,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         logging.error(
             f"chat fail session={session_id} model={settings.remote_primary_model} latency={latency_ms}ms err={msg}"
         )
-        user_msg, error_type = _build_user_error_message(msg)
+        user_msg, error_type = _user_error_msg(msg)
         try:
             append_error_row(session_id, latency_ms, error_type, msg)
         except Exception as log_exc:
@@ -757,7 +757,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=user_msg)
 
 
-def create_chat_stream_response(payload: Any) -> StreamingResponse:
+def create_chat_stream(payload: Any) -> StreamingResponse:
     start = time.time()
     session_id = payload.session_id.strip() if payload.session_id else "default"
     if not session_id:
@@ -776,7 +776,7 @@ def create_chat_stream_response(payload: Any) -> StreamingResponse:
                 merged_messages=merged_messages,
                 rounds=settings.short_memory_rounds,
             )
-            memory_text = build_memory_context_text(
+            memory_text = build_memory_text(
                 short_mem=short_mem,
                 pref_items=[],
                 progress_items=[],

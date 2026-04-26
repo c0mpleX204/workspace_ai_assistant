@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional,Tuple
 import re
 
-def decode_text_with_fallback(raw: bytes) -> str:
+def decode_text(raw: bytes) -> str:
     for enc in ['utf-8', 'gbk']:
         try:
             return raw.decode(enc)
@@ -80,7 +80,7 @@ def parse_txt(file_path: str, chunk_size: int = 600,
               overlap: int = 80) -> List[Dict[str, Any]]:
     p = Path(file_path)
     raw = p.read_bytes()
-    text = decode_text_with_fallback(raw)
+    text = decode_text(raw)
     chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap, page_no=None, start_index=0)
     if not chunks:
         raise ValueError("txt 文件为空或无可解析文本")

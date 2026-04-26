@@ -1,9 +1,9 @@
-﻿from typing import List, Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, UploadFile
 from pydantic import BaseModel, Field
 
-from server.services.chat_service import create_chat_stream_response, handle_chat
+from server.services.chat_service import create_chat_stream, handle_chat
 
 router = APIRouter(tags=["chat"])
 
@@ -48,5 +48,5 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
 @router.post("/chat/stream")
 async def chat_stream(payload: ChatRequest):
-    return create_chat_stream_response(payload)
+    return create_chat_stream(payload)
 

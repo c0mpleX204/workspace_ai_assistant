@@ -1,11 +1,11 @@
-﻿# companion_memory.py
+# companion_memory.py
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, List
 
 from server.infra.repo import (
-    list_user_preferences_by_prefix,
+    list_user_prefs,
     list_learning_progress,
     list_user_reminders,
     upsert_user_preference,
@@ -31,7 +31,7 @@ def _fact_key(session_id: str, name: str) -> str:
     return f"{COMPANION_FACT_PREFIX}{sid}:{name.strip()}"
 
 
-def extract_companion_memory_signals(user_text: str, session_id: str) -> List[Dict[str, Any]]:
+def extract_mem_signals(user_text: str, session_id: str) -> List[Dict[str, Any]]:
     text = _clean(user_text)
     if not text:
         return []
@@ -100,7 +100,7 @@ def extract_companion_memory_signals(user_text: str, session_id: str) -> List[Di
     return signals
 
 
-def persist_companion_memory_signals(user_id: str, signals: List[Dict[str, Any]]) -> None:
+def save_mem_signals(user_id: str, signals: List[Dict[str, Any]]) -> None:
     uid = _clean(user_id) or "user1"
     if not signals:
         return
@@ -121,16 +121,16 @@ def persist_companion_memory_signals(user_id: str, signals: List[Dict[str, Any]]
         )
 
 
-def build_companion_memory_context(user_id: str, session_id: str, *, include_progress: bool = True) -> str:
+def build_memory_ctx(user_id: str, session_id: str, *, include_progress: bool = True) -> str:
     uid = _clean(user_id) or "user1"
     sid = _clean(session_id) or "default"
 
-    companion_prefs = list_user_preferences_by_prefix(
+    companion_prefs = list_user_prefs(
         user_id=uid,
         key_prefix=COMPANION_PREF_PREFIX,
         limit=MAX_PREF_CONTEXT,
     )
-    session_facts = list_user_preferences_by_prefix(
+    session_facts = list_user_prefs(
         user_id=uid,
         key_prefix=f"{COMPANION_FACT_PREFIX}{sid}:",
         limit=MAX_FACT_CONTEXT,
@@ -199,7 +199,7 @@ def _overlap_score(query_text: str, item_text: str) -> float:
     return len(tq & ti) / max(1, len(tq))
 
 
-def search_companion_long_term_memory(
+def search_recall(
     user_id: str,
     session_id: str,
     query: str,
@@ -212,12 +212,12 @@ def search_companion_long_term_memory(
     if not q:
         return []
 
-    pref_items = list_user_preferences_by_prefix(
+    pref_items = list_user_prefs(
         user_id=uid,
         key_prefix=COMPANION_PREF_PREFIX,
         limit=40,
     )
-    fact_items = list_user_preferences_by_prefix(
+    fact_items = list_user_prefs(
         user_id=uid,
         key_prefix=f"{COMPANION_FACT_PREFIX}{sid}:",
         limit=40,
@@ -254,7 +254,7 @@ def search_companion_long_term_memory(
     return filtered[: max(1, int(top_k))]
 
 
-def format_companion_long_term_memory(items: List[Dict[str, Any]]) -> str:
+def format_recall(items: List[Dict[str, Any]]) -> str:
     if not items:
         return ""
 
