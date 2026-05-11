@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { listMaterialsApi, uploadMaterialApi, chatApi, getMaterialViewUrl } from './api'
+import { listMaterialsApi, uploadMaterialApi, chatApi, getMaterialViewUrl, getChatSessionApi } from './api'
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -36,7 +36,10 @@ function Message({ m }) {
           {m.refs.map((r, i) => (
             <div className="ref-item" key={i}>
               <span className="ref-badge">{r.ref_id}</span>
-              <span>{r.doucument_title}{r.page_no != null ? ` · p${r.page_no}` : ''} — {r.summary}</span>
+              <span>
+                {r.doucument_title}{r.page_no != null ? ` · p${r.page_no}` : ''} — {r.summary}
+                {r.source_path && <span className="ref-path" title={r.source_path}>{r.source_path}</span>}
+              </span>
             </div>
           ))}
         </div>
@@ -68,8 +71,27 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const composerRef = useRef(null)
+  const chatSessionId = `course_${course.course_id}_${sessionId || 'default'}`
 
   useEffect(() => { fetchMaterials() }, [course.course_id])
+  useEffect(() => {
+    let cancelled = false
+    setMessages([])
+
+    async function loadChatHistory() {
+      try {
+        const res = await getChatSessionApi(backendUrl, chatSessionId, userId)
+        if (cancelled) return
+        const stored = Array.isArray(res.messages) ? res.messages : []
+        setMessages(stored.filter(m => m?.role === 'user' || m?.role === 'assistant'))
+      } catch (e) {
+        void e
+      }
+    }
+
+    loadChatHistory()
+    return () => { cancelled = true }
+  }, [backendUrl, chatSessionId, userId])
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
   useEffect(() => {
     const ta = textareaRef.current
@@ -159,7 +181,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
       const docIds = Array.from(selectedIds)
       const payload = {
         user_id: userId,
-        session_id: `course_${course.course_id}_${sessionId}`,
+        session_id: chatSessionId,
         messages: [userMsg],
         use_retrieval: docIds.length > 0,
         document_ids: docIds.length > 0 ? docIds : undefined,
@@ -230,7 +252,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
       <div className="course-sidebar" style={{ width: leftPaneWidth, minWidth: leftPaneWidth, maxWidth: leftPaneWidth }}>
         <div className="course-sidebar-header">
           <button className="back-btn" onClick={onBack}>← 返回</button>
-          <div className="course-sidebar-name">{course.name}</div>
+          <div className="course-sidebar-name" title={course.project_path || course.name}>{course.name}</div>
           <button className="ghost-btn small" onClick={() => setShowUpload(v => !v)}>+ 上传</button>
         </div>
 
@@ -239,8 +261,11 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
             <input className="field-input" placeholder="资料标题" value={uploadState.title}
               onChange={e => setUploadState(s => ({ ...s, title: e.target.value }))} />
             <label className="file-label small">
-              {uploadState.file ? uploadState.file.name : '选择 PDF / TXT'}
-              <input type="file" accept=".pdf,.txt" style={{ display: 'none' }}
+              {uploadState.file ? uploadState.file.name : '选择 PPTX / PDF / DOCX / 代码文件'}
+              <input
+                type="file"
+                accept=".ppt,.pptx,.pdf,.docx,.txt,.md,.py,.js,.jsx,.ts,.tsx,.json,.html,.css,.csv,.yml,.yaml,.toml,.xml,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.sql,.sh,.ps1"
+                style={{ display: 'none' }}
                 onChange={e => setUploadState(s => ({ ...s, file: e.target.files[0] }))} />
             </label>
             {uploadProgress !== null && (
@@ -252,7 +277,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
           </form>
         )}
 
-        <div className="sidebar-section-label">资料列表（勾选参与对话）</div>
+        <div className="sidebar-section-label">项目资料（勾选参与对话）</div>
         <div className="sidebar-mat-list">
           {materials.length === 0 && <div className="sidebar-empty">暂无资料</div>}
           {materials.map(mat => (
@@ -276,7 +301,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
 
       <div className="course-chat-middle" style={{ width: middlePaneWidth, minWidth: middlePaneWidth, maxWidth: middlePaneWidth }}>
         <div className="preview-topbar">
-          <span>文件预览</span>
+            <span>项目文件预览</span>
           {previewDocId && <button className="ghost-btn small" onClick={() => setPreviewDocId(null)}>关闭预览</button>}
         </div>
         {previewDocId ? (
@@ -296,7 +321,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
       <div className="course-chat-right">
         <div className="chat-panel">
           <div className="topbar">
-            <span className="topbar-title">{useRetrieval ? `已选 ${selectedIds.size} 份资料` : '自由对话'}</span>
+            <span className="topbar-title">{useRetrieval ? `项目上下文：${selectedIds.size} 份资料` : '无项目上下文'}</span>
             <button className={`retrieval-toggle ${useWebSearch ? 'active' : ''}`}
               onClick={() => setUseWebSearch(v => !v)} title="联网搜索">🌐 联网</button>
             <div className="topbar-spacer" />
@@ -311,7 +336,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
                 <div className="chat-empty-icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22" strokeWidth="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 </div>
-                <p>{useRetrieval ? `基于 ${selectedIds.size} 份资料对话` : '勾选左侧资料开启 RAG，或直接发消息'}</p>
+                <p>{useRetrieval ? `基于 ${selectedIds.size} 份项目资料对话` : '勾选左侧资料开启项目上下文，或直接作为普通对话发送'}</p>
               </div>
             )}
             {messages.map((m, i) => <Message key={i} m={m} />)}

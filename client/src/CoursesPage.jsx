@@ -15,7 +15,7 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
       const res = await listCoursesApi(backendUrl, userId)
       setCourses(res.items || [])
     } catch (e) {
-      showToast('获取课程失败: ' + e.message, 'error')
+      showToast('获取项目失败: ' + e.message, 'error')
     }
   }
 
@@ -28,7 +28,7 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
       setNewName('')
       setNewTerm('')
       setCreating(false)
-      showToast('课程已创建', 'success')
+      showToast('项目已创建', 'success')
       fetchCourses()
     } catch (e) {
       showToast('创建失败: ' + e.message, 'error')
@@ -38,7 +38,7 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
   }
 
   async function handleDelete(courseId, name) {
-    if (!window.confirm(`确认删除课程「${name}」及其所有资料？`)) return
+    if (!window.confirm(`确认删除项目「${name}」及其索引资料？本地项目文件夹会保留。`)) return
     try {
       await deleteCourseApi(backendUrl, courseId)
       showToast('已删除', 'success')
@@ -51,24 +51,24 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
   return (
     <div className="courses-page">
       <div className="courses-header">
-        <h2 className="courses-title">我的课程</h2>
-        <button className="btn-primary" onClick={() => setCreating(true)}>+ 新建课程</button>
+        <h2 className="courses-title">我的项目</h2>
+        <button className="btn-primary" onClick={() => setCreating(true)}>+ 新建项目</button>
       </div>
 
       {creating && (
         <div className="course-create-modal-bg" onClick={() => setCreating(false)}>
           <form className="course-create-modal" onClick={e => e.stopPropagation()} onSubmit={handleCreate}>
-            <div className="modal-title">新建课程</div>
+            <div className="modal-title">新建项目</div>
             <input
               className="field-input"
-              placeholder="课程名称（必填）"
+              placeholder="项目或课程名称（必填）"
               value={newName}
               onChange={e => setNewName(e.target.value)}
               autoFocus
             />
             <input
               className="field-input"
-              placeholder="学期（选填，如 2024秋）"
+              placeholder="备注（选填，如 2026春 / 前端练习）"
               value={newTerm}
               onChange={e => setNewTerm(e.target.value)}
             />
@@ -83,8 +83,8 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
       {courses.length === 0 && (
         <div className="courses-empty">
           <div className="courses-empty-icon">📚</div>
-          <p>还没有课程</p>
-          <span style={{color:'var(--text-muted)',fontSize:'13px'}}>点击右上角「新建课程」开始添加</span>
+          <p>还没有项目</p>
+          <span style={{color:'var(--text-muted)',fontSize:'13px'}}>点击右上角「新建项目」开始添加</span>
         </div>
       )}
 
@@ -102,11 +102,12 @@ export default function CoursesPage({ backendUrl, userId, onEnterCourse, showToa
               <div className="course-card-meta">
                 {c.term && <span>{c.term}</span>}
                 <span>{c.doc_count} 份资料</span>
+                {c.project_path && <span title={c.project_path}>本地目录</span>}
               </div>
             </div>
             <button
               className="course-card-del"
-              title="删除课程"
+              title="删除项目索引"
               onClick={e => { e.stopPropagation(); handleDelete(c.course_id, c.name) }}
             >×</button>
           </div>

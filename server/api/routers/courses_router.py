@@ -18,8 +18,15 @@ from server.api.schemas import (
     MaterialItem,
     MaterialListResponse,
 )
+from server.services.project_workspace_service import ensure_course_workspace
 
 router = APIRouter(tags=["courses"])
+
+
+def _with_project_path(raw: Dict[str, object]) -> Dict[str, object]:
+    course_id = int(raw["course_id"])
+    name = str(raw["name"])
+    return {**raw, "project_path": str(ensure_course_workspace(course_id, name))}
 
 
 @router.post("/courses", response_model=CourseItem)
@@ -27,7 +34,7 @@ def api_create_course(payload: CourseCreateRequest) -> CourseItem:
     try:
         cid = create_course(name=payload.name, term=payload.term, owner_id=payload.owner_id)
         raw = get_course(cid)
-        return CourseItem(**raw)
+        return CourseItem(**_with_project_path(raw))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"鍒涘缓璇剧▼澶辫触: {exc}")
 
@@ -36,7 +43,7 @@ def api_create_course(payload: CourseCreateRequest) -> CourseItem:
 def api_list_courses(owner_id: str = "default_user", limit: int = 50, offset: int = 0) -> CourseListResponse:
     try:
         items_raw = list_courses(owner_id=owner_id, limit=limit, offset=offset)
-        items = [CourseItem(**r) for r in items_raw]
+        items = [CourseItem(**_with_project_path(r)) for r in items_raw]
         return CourseListResponse(items=items, total=len(items))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"鑾峰彇璇剧▼鍒楄〃澶辫触: {exc}")
@@ -48,7 +55,7 @@ def api_get_course(course_id: int) -> CourseItem:
         raw = get_course(course_id)
         if not raw:
             raise HTTPException(status_code=404, detail="课程不存在")
-        return CourseItem(**raw)
+        return CourseItem(**_with_project_path(raw))
     except HTTPException:
         raise
     except Exception as exc:
@@ -62,7 +69,7 @@ def api_update_course(course_id: int, payload: CourseUpdateRequest) -> CourseIte
         raw = get_course(course_id)
         if not raw:
             raise HTTPException(status_code=404, detail="课程不存在")
-        return CourseItem(**raw)
+        return CourseItem(**_with_project_path(raw))
     except HTTPException:
         raise
     except Exception as exc:

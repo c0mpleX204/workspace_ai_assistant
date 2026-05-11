@@ -1,5 +1,6 @@
 import threading
 import uuid
+import mimetypes
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -10,6 +11,7 @@ from server.documents.parser import parse_document
 from server.infra.repo import (
     create_document,
     delete_doc_chunks,
+    get_course,
     get_document_detail,
     insert_chunks,
     list_chunks_emb,
@@ -25,11 +27,13 @@ from server.api.schemas import (
     SearchResponse,
 )
 from server.services.embedding_service import embed_document_chunks, embed_text, rank_chunks
+from server.services.project_workspace_service import ensure_course_workspace, unique_child_path
 
 router = APIRouter(tags=["materials"])
 
 UPLOAD_DIR = Path("data/upload")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+UNINDEXED_ASSET_SUFFIXES = {".ppt"}
 
 
 def _embed_chunks_async(document_id: int) -> None:
@@ -46,17 +50,23 @@ async def upload_material(
     file: UploadFile = File(...),
 ) -> Dict[str, object]:
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in [".txt", ".pdf"]:
-        raise HTTPException(status_code=400, detail="仅支持 txt/pdf")
-
-    save_name = f"{uuid.uuid4().hex}{suffix}"
-    save_path = UPLOAD_DIR / save_name
+    if not suffix:
+        raise HTTPException(status_code=400, detail="文件必须带扩展名")
 
     try:
+        course = get_course(course_id)
+        if not course:
+            raise HTTPException(status_code=404, detail="课程不存在")
+        workspace = ensure_course_workspace(course_id, str(course["name"]))
+        save_path = unique_child_path(workspace, file.filename or f"{uuid.uuid4().hex}{suffix}")
         data = await file.read()
         save_path.write_bytes(data)
 
-        file_type, chunks = parse_document(str(save_path), chunk_size=600, overlap=80)
+        chunks: List[Dict[str, object]] = []
+        if suffix in UNINDEXED_ASSET_SUFFIXES:
+            file_type = suffix.lstrip(".")
+        else:
+            file_type, chunks = parse_document(str(save_path), chunk_size=600, overlap=80)
         document_id = create_document(
             course_id=course_id,
             title=title,
@@ -64,7 +74,8 @@ async def upload_material(
             source_path=str(save_path),
         )
         chunk_count = insert_chunks(document_id, chunks)
-        threading.Thread(target=_embed_chunks_async, args=(document_id,), daemon=True).start()
+        if chunk_count > 0:
+            threading.Thread(target=_embed_chunks_async, args=(document_id,), daemon=True).start()
 
         return {
             "document_id": document_id,
@@ -72,6 +83,8 @@ async def upload_material(
             "chunk_count": chunk_count,
             "source_path": str(save_path),
         }
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -150,7 +163,22 @@ def api_view_material(document_id: int):
         file_path = Path(raw["source_path"])
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="文件不存在")
-        media_type = "application/pdf" if raw["file_type"] == "pdf" else "text/plain; charset=utf-8"
+        media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        if str(raw["file_type"]).lower() in {
+            "txt",
+            "md",
+            "markdown",
+            "py",
+            "js",
+            "jsx",
+            "ts",
+            "tsx",
+            "json",
+            "html",
+            "css",
+            "csv",
+        }:
+            media_type = "text/plain; charset=utf-8"
         return FileResponse(
             str(file_path),
             media_type=media_type,

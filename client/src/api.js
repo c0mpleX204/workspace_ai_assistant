@@ -1,5 +1,44 @@
 export const getBackend = (baseUrl) => baseUrl || (window.env && window.env.BACKEND_URL) || 'http://127.0.0.1:8000'
 
+export async function getProviderSettingsApi(baseUrl) {
+  const url = `${getBackend(baseUrl)}/settings/provider`
+  const res = await fetch(url)
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function updateProviderSettingsApi(baseUrl, payload) {
+  const url = `${getBackend(baseUrl)}/settings/provider`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function getChatSessionApi(baseUrl, sessionId, userId = 'default_user') {
+  const params = new URLSearchParams()
+  if (userId) params.set('user_id', userId)
+  const url = `${getBackend(baseUrl)}/chat/sessions/${encodeURIComponent(sessionId)}?${params.toString()}`
+  const res = await fetch(url)
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
 export async function chatApi(baseUrl, payload, options = {}) {
   const url = `${getBackend(baseUrl)}/chat`
   const controller = new AbortController()

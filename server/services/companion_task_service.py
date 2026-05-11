@@ -11,7 +11,7 @@ from server.orchestration.companion_routing import FAST_MODEL
 from server.services.model_service import smart_model_dispatch
 
 
-HEAVY_MODEL = os.getenv("COMPANION_HEAVY_MODEL", settings.remote_primary_model).strip()
+HEAVY_MODEL = os.getenv("COMPANION_HEAVY_MODEL", settings.remote_heavy_model).strip()
 HEAVY_TOKEN_MAX = int(os.getenv("COMPANION_HEAVY_MAX_TOKENS", "900"))
 HEAVY_ASYNC = os.getenv("COMPANION_HEAVY_ASYNC_ENABLED", "true").strip().lower() == "true"
 WORKER_MAX = max(1, int(os.getenv("COMPANION_HEAVY_MAX_WORKERS", "2")))

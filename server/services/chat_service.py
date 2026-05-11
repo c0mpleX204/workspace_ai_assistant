@@ -14,6 +14,14 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from server.config.config import settings
+from server.memory.conversation_store import (
+    DEFAULT_HISTORY_MAX as CHAT_HISTORY_MAX,
+    infer_scope,
+    load_conversation,
+    merge_dialog,
+    save_conversation,
+)
+from server.memory.conversation_summary import compact_dialog
 from server.memory.memory_rules import RULES, normalize_pref_signal
 from server.infra.repo import (
     get_document_detail,
@@ -29,7 +37,6 @@ from server.services.embedding_service import cosine_similarity, embed_text, ran
 from server.services.model_service import remote_stream_reply, smart_model_dispatch
 from server.services.web_search_service import web_search
 
-SESSION_STORE: Dict[str, List[Dict[str, str]]] = {}
 LOG_HTML_PATH = Path("logs/error_logs.html")
 LOG_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -448,11 +455,88 @@ def inject_memory_as_system(
     return [memory_msg] + messages
 
 
+def inject_summary_as_system(
+    messages: List[Dict[str, str]],
+    summary: str,
+) -> List[Dict[str, str]]:
+    text = (summary or "").strip()
+    if not text:
+        return messages
+    marker = "Conversation summary"
+    if any(m.get("role") == "system" and marker in m.get("content", "") for m in messages):
+        return messages
+    summary_msg = {
+        "role": "system",
+        "content": (
+            "Conversation summary (older turns only; the latest user message and "
+            "recent dialogue override this if there is any conflict):\n"
+            f"{text}"
+        ),
+    }
+    first_system_idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
+    if first_system_idx >= 0:
+        return messages[: first_system_idx + 1] + [summary_msg] + messages[first_system_idx + 1 :]
+    return [summary_msg] + messages
+
+
 def get_latest_user_query(messages: List[Dict[str, str]]) -> str:
     for msg in reversed(messages):
         if msg.get("role") == "user":
             return str(msg.get("content", "")).strip()
     return ""
+
+
+def rewrite_retrieval_query(raw_query: str, messages: List[Dict[str, str]]) -> str:
+    query = str(raw_query or "").strip()
+    if not query:
+        return ""
+    recent = [
+        {
+            "role": str(m.get("role", "")),
+            "content": str(m.get("content", "")).strip()[:500],
+        }
+        for m in messages[-6:]
+        if str(m.get("role", "")) in {"user", "assistant"} and str(m.get("content", "")).strip()
+    ]
+    if len(query) < 12 and len(recent) <= 1:
+        return query
+
+    try:
+        result = smart_model_dispatch(
+            {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是检索查询改写器。请基于用户原始输入和最近对话，"
+                            "改写成一个适合资料检索/联网搜索的中文查询。"
+                            "只输出改写后的查询，不要回答问题，不要解释。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"最近对话：\n{json.dumps(recent, ensure_ascii=False)}\n\n"
+                            f"用户原始输入：{query}\n\n"
+                            "改写查询："
+                        ),
+                    },
+                ],
+                "model": settings.remote_fast_model,
+                "generation": {
+                    "max_tokens": 120,
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                },
+            }
+        )
+        rewritten = str(result.get("reply", "")).strip()
+        rewritten = re.sub(r"^改写查询[:：]\s*", "", rewritten).strip().strip('"')
+        if rewritten and len(rewritten) <= 240:
+            return rewritten
+    except Exception as exc:
+        logging.warning("rewrite retrieval query failed: %s", exc)
+    return query
 
 
 def retrieve_chunks_for_chat(
@@ -484,6 +568,7 @@ def build_reference_items(chunks: List[Dict[str, object]], max_items: int = 8) -
     refs: List[Dict[str, object]] = []
     for i, c in enumerate(chunks[:max_items], start=1):
         score_val = c.get("score")
+        source_path = str(c.get("source_path", "") or "")
         refs.append(
             {
                 "ref_id": f"参考{i}",
@@ -491,6 +576,7 @@ def build_reference_items(chunks: List[Dict[str, object]], max_items: int = 8) -
                 "summary": _brief_text(c.get("content", ""), max_len=100),
                 "doucument_title": c.get("document_title", "未知文档"),
                 "score": float(score_val) if isinstance(score_val, (int, float)) else None,
+                "source_path": source_path or None,
             }
         )
     return refs
@@ -506,6 +592,7 @@ def build_retrieval_context(chunks: List[Dict[str, object]]) -> str:
     ]
     for i, c in enumerate(chunks, start=1):
         title = str(c.get("document_title", "未知文档"))
+        source_path = str(c.get("source_path", "") or "").strip()
         page_no = c.get("page_no")
         page_text = f"第{page_no}页" if page_no is not None else "未知页码"
         content = str(c.get("content", "")).strip()
@@ -513,6 +600,8 @@ def build_retrieval_context(chunks: List[Dict[str, object]]) -> str:
         score_text = f"{float(score):.4f}" if isinstance(score, (int, float)) else "N/A"
 
         lines.append(f"[参考{i}] 来源：{title} | {page_text} | 相似度：{score_text}")
+        if source_path:
+            lines.append(f"路径：{source_path}")
         lines.append(content)
         lines.append("")
     return "\n".join(lines).strip()
@@ -616,20 +705,45 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
     try:
         if not session_id:
             session_id = "default"
-        history = SESSION_STORE.get(session_id, [])
+        user_id = payload.user_id.strip() if payload.user_id else "default_user"
+        if not user_id:
+            user_id = "default_user"
+        conversation_scope = infer_scope(session_id)
         raw_messages = [m.model_dump() for m in payload.messages]
         raw_messages = [m for m in raw_messages if m.get("content")]
-        merged_messages = history + raw_messages
-        merged_messages = [m for m in merged_messages if m.get("content")]
+        merged_messages = await run_in_threadpool(
+            merge_dialog,
+            user_id,
+            session_id,
+            raw_messages,
+            scope=conversation_scope,
+            limit=CHAT_HISTORY_MAX,
+        )
+        previous_summary = await run_in_threadpool(
+            lambda: load_conversation(
+                user_id,
+                session_id,
+                scope=conversation_scope,
+                limit=2,
+            ).get("compressed_summary", "")
+        )
+        try:
+            merged_messages, conversation_summary, did_summarize = await run_in_threadpool(
+                compact_dialog,
+                merged_messages,
+                str(previous_summary or ""),
+            )
+            if not did_summarize and not conversation_summary:
+                conversation_summary = str(previous_summary or "")
+        except Exception as exc:
+            logging.warning(f"chat summary compact failed session={session_id} err={exc}")
+            conversation_summary = str(previous_summary or "")
 
         short_mem = get_short_term_memory(
             session_id=session_id,
             merged_messages=merged_messages,
             rounds=settings.short_memory_rounds,
         )
-        user_id = payload.user_id.strip() if payload.user_id else "default_user"
-        if not user_id:
-            user_id = "default_user"
 
         try:
             pref_items, progress_items = await asyncio.gather(
@@ -669,6 +783,13 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             progress_top_k=settings.progress_top_k,
         )
         query = get_latest_user_query(merged_messages)
+        retrieval_query = query
+        if payload.use_retrieval or payload.use_web_search:
+            retrieval_query = await run_in_threadpool(
+                rewrite_retrieval_query,
+                query,
+                merged_messages,
+            )
         resolved_coursed_id: Optional[int] = None
         if payload.document_id:
             try:
@@ -697,7 +818,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             if eff_doc_ids:
                 retrieved_chunks = await run_in_threadpool(
                     retrieve_chunks_multi,
-                    query=query,
+                    query=retrieval_query,
                     document_ids=eff_doc_ids,
                     top_k=20,
                     candidate_limit=2000,
@@ -705,7 +826,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             else:
                 retrieved_chunks = await run_in_threadpool(
                     retrieve_chunks_for_chat,
-                    query=query,
+                    query=retrieval_query,
                     document_id=payload.document_id,
                     top_k=20,
                     candidate_limit=2000,
@@ -715,12 +836,13 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         web_context = ""
         if payload.use_web_search:
             try:
-                web_results = web_search(query, top_k=5)
+                web_results = web_search(retrieval_query, top_k=5)
                 web_context = build_web_context(web_results)
             except Exception as web_exc:
                 logging.warning(f"web search failed: {web_exc}")
 
         final_messages = inject_system_prompt(merged_messages)
+        final_messages = inject_summary_as_system(final_messages, conversation_summary)
         if settings.memory_enabled:
             final_messages = inject_memory_as_system(final_messages, memory_text)
         if recall_ctx:
@@ -735,9 +857,21 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         logging.info(
             f"chat of session={session_id} model={settings.remote_primary_model} latency={latency_ms}ms"
         )
-        merged_messages.append({"role": "assistant", "content": result["reply"]})
-        SESSION_STORE[session_id] = merged_messages[-settings.history_max_rounds * 2 :]
         references = build_reference_items(retrieved_chunks) if payload.use_retrieval else []
+        merged_messages.append({
+            "role": "assistant",
+            "content": result["reply"],
+            "refs": references,
+        })
+        await run_in_threadpool(
+            save_conversation,
+            user_id,
+            session_id,
+            merged_messages,
+            scope=conversation_scope,
+            limit=CHAT_HISTORY_MAX,
+            compressed_summary=conversation_summary,
+        )
         return {
             "reply": str(result.get("reply", "")),
             "latency_ms": int(result.get("latency_ms", 0)),
@@ -762,12 +896,39 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
     session_id = payload.session_id.strip() if payload.session_id else "default"
     if not session_id:
         session_id = "default"
+    user_id = payload.user_id.strip() if payload.user_id else "default_user"
+    if not user_id:
+        user_id = "default_user"
+    conversation_scope = infer_scope(session_id)
 
-    history = SESSION_STORE.get(session_id, [])
     raw_messages = [m.model_dump() for m in payload.messages]
     raw_messages = [m for m in raw_messages if m.get("content")]
-    merged_messages = [m for m in (history + raw_messages) if m.get("content")]
+    merged_messages = merge_dialog(
+        user_id,
+        session_id,
+        raw_messages,
+        scope=conversation_scope,
+        limit=CHAT_HISTORY_MAX,
+    )
+    try:
+        previous_summary = load_conversation(
+            user_id,
+            session_id,
+            scope=conversation_scope,
+            limit=2,
+        ).get("compressed_summary", "")
+        merged_messages, conversation_summary, did_summarize = compact_dialog(
+            merged_messages,
+            str(previous_summary or ""),
+        )
+        if not did_summarize and not conversation_summary:
+            conversation_summary = str(previous_summary or "")
+    except Exception as exc:
+        logging.warning(f"chat stream summary compact failed session={session_id} err={exc}")
+        conversation_summary = ""
+
     final_messages = inject_system_prompt(merged_messages)
+    final_messages = inject_summary_as_system(final_messages, conversation_summary)
 
     if settings.memory_enabled:
         try:
@@ -799,7 +960,14 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
                 latency_ms = int((time.time() - start) * 1000)
                 yield f"data: {json.dumps({'done': True, 'reply': reply, 'latency_ms': latency_ms}, ensure_ascii=False)}\n\n"
                 merged_messages.append({"role": "assistant", "content": reply})
-                SESSION_STORE[session_id] = merged_messages[-settings.history_max_rounds * 2 :]
+                save_conversation(
+                    user_id,
+                    session_id,
+                    merged_messages,
+                    scope=conversation_scope,
+                    limit=CHAT_HISTORY_MAX,
+                    compressed_summary=conversation_summary,
+                )
                 return
 
             reply_chunks: List[str] = []
@@ -819,7 +987,14 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
             reply = "".join(reply_chunks).strip()
             latency_ms = int((time.time() - start) * 1000)
             merged_messages.append({"role": "assistant", "content": reply})
-            SESSION_STORE[session_id] = merged_messages[-settings.history_max_rounds * 2 :]
+            save_conversation(
+                user_id,
+                session_id,
+                merged_messages,
+                scope=conversation_scope,
+                limit=CHAT_HISTORY_MAX,
+                compressed_summary=conversation_summary,
+            )
             yield f"data: {json.dumps({'done': True, 'reply': reply, 'latency_ms': latency_ms}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             msg = str(exc)

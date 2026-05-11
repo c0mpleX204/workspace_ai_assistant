@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { chatApi } from './api'
+import { chatApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi } from './api'
 import CoursesPage from './CoursesPage'
 import CourseChatPage from './CourseChatPage'
 import './styles.css'
@@ -153,7 +153,10 @@ function Message({ m, onImageClick, onTts }) {
         <div className="refs">{m.refs.map((r, i) => (
           <div className="ref-item" key={i}>
             <span className="ref-badge">{r.ref_id}</span>
-            <span>{r.doucument_title}{r.page_no != null ? ` · p${r.page_no}` : ''} — {r.summary}</span>
+            <span>
+              {r.doucument_title}{r.page_no != null ? ` · p${r.page_no}` : ''} — {r.summary}
+              {r.source_path && <span className="ref-path" title={r.source_path}>{r.source_path}</span>}
+            </span>
           </div>
         ))}</div>
       )}
@@ -171,6 +174,14 @@ function TypingIndicator() {
 
 const THREAD_KEY_PREFIX = 'desktop_chat_threads_v1:'
 const THREAD_DEFAULT_TITLE = '新对话'
+const MASKED_KEY_VALUE = '••••••••'
+const DEFAULT_PROVIDER_SETTINGS = {
+  api_base_url: 'https://api.deepseek.com',
+  api_key_masked: '',
+  has_api_key: false,
+  fast_model: 'deepseek-v4-flash',
+  heavy_model: 'deepseek-v4-pro',
+}
 
 function buildChatThreadTitle(messages) {
   const firstUser = (messages || []).find(x => x?.role === 'user' && String(x?.content || '').trim())
@@ -212,6 +223,12 @@ export default function App() {
   const LIVE2D_BG_KEY = 'desktop_live2d_bg_url_v1'
   const [backendUrl, setBackendUrl] = useState(() => window.env?.BACKEND_URL || 'http://127.0.0.1:8000')
   const [userId, setUserId] = useState('user1')
+  const [providerSettings, setProviderSettings] = useState(DEFAULT_PROVIDER_SETTINGS)
+  const [providerDraft, setProviderDraft] = useState({
+    api_base_url: DEFAULT_PROVIDER_SETTINGS.api_base_url,
+    api_key: '',
+  })
+  const [savingProvider, setSavingProvider] = useState(false)
   const [sessionId] = useState('default')
   const [chatThreads, setChatThreads] = useState(() => [createChatThread('chat_default')])
   const [activeThreadId, setActiveChatThreadId] = useState('chat_default')
@@ -288,12 +305,85 @@ export default function App() {
   }, [threadStoreKey, chatThreads])
 
   useEffect(() => {
+    if (page !== 'chat' || !activeThreadId || messages.length > 0) return
+    let cancelled = false
+
+    async function loadThreadHistory() {
+      try {
+        const res = await getChatSessionApi(backendUrl, activeThreadId, userId)
+        if (cancelled) return
+        const stored = Array.isArray(res.messages) ? res.messages : []
+        if (stored.length === 0) return
+        setChatThreads(prev => prev.map(thread => {
+          if (thread.id !== activeThreadId) return thread
+          const current = Array.isArray(thread.messages) ? thread.messages : []
+          if (current.length > 0) return thread
+          return {
+            ...thread,
+            messages: stored.filter(m => m?.role === 'user' || m?.role === 'assistant'),
+            title: res.title || thread.title || THREAD_DEFAULT_TITLE,
+            updatedAt: res.updated_at ? Date.parse(res.updated_at) || Date.now() : Date.now(),
+          }
+        }))
+      } catch (e) {
+        void e
+      }
+    }
+
+    loadThreadHistory()
+    return () => { cancelled = true }
+  }, [backendUrl, userId, activeThreadId, page, messages.length])
+
+  useEffect(() => {
     try {
       localStorage.setItem(LIVE2D_BG_KEY, String(live2dBgUrl || '').trim())
     } catch (e) {
       void e
     }
   }, [live2dBgUrl])
+
+  const loadProviderSettings = useCallback(async (showErrors = false) => {
+    try {
+      const res = await getProviderSettingsApi(backendUrl)
+      const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
+      setProviderSettings(provider)
+      setProviderDraft({
+        api_base_url: provider.api_base_url || DEFAULT_PROVIDER_SETTINGS.api_base_url,
+        api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
+      })
+    } catch (e) {
+      if (showErrors) showToast('模型 API 设置读取失败: ' + (e?.message || e), 'error')
+    }
+  }, [backendUrl, showToast])
+
+  useEffect(() => {
+    loadProviderSettings(false)
+  }, [loadProviderSettings])
+
+  async function saveProviderSettings() {
+    setSavingProvider(true)
+    try {
+      const payload = {
+        api_base_url: String(providerDraft.api_base_url || '').trim(),
+      }
+      const keyText = String(providerDraft.api_key || '')
+      if (keyText !== MASKED_KEY_VALUE) {
+        payload.api_key = keyText.trim()
+      }
+      const res = await updateProviderSettingsApi(backendUrl, payload)
+      const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
+      setProviderSettings(provider)
+      setProviderDraft({
+        api_base_url: provider.api_base_url || DEFAULT_PROVIDER_SETTINGS.api_base_url,
+        api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
+      })
+      showToast('模型 API 设置已保存', 'success')
+    } catch (e) {
+      showToast('模型 API 设置保存失败: ' + (e?.message || e), 'error')
+    } finally {
+      setSavingProvider(false)
+    }
+  }
 
   const setMessages = useCallback((updater) => {
     setChatThreads(prev => prev.map(thread => {
@@ -477,8 +567,8 @@ export default function App() {
   const SidebarNav = () => (
     <div className="sidebar">
       <div className="sidebar-logo" title="校园学习助手"><IconLogo /></div>
-      <button className={`sidebar-btn ${page==='courses'?'active':''}`} title="我的课程" onClick={() => setPage('courses')}><IconBook /></button>
-      <button className={`sidebar-btn ${page==='chat'?'active':''}`} title="自由对话" onClick={() => setPage('chat')}><IconChat /></button>
+      <button className={`sidebar-btn ${page==='courses'?'active':''}`} title="项目" onClick={() => setPage('courses')}><IconBook /></button>
+      <button className={`sidebar-btn ${page==='chat'?'active':''}`} title="普通对话" onClick={() => setPage('chat')}><IconChat /></button>
       <button className={`sidebar-btn ${page==='companion'?'active':''}`} title="持续对话" onClick={() => setPage('companion')}><IconCompanion /></button>
       <div className="sidebar-spacer" />
       <button className={`sidebar-btn ${page==='settings'?'active':''}`} title="设置" onClick={() => setPage('settings')}><IconSettings /></button>
@@ -503,7 +593,7 @@ export default function App() {
       <SidebarNav />
       <div className="main">
         <div className="topbar">
-          <span className="topbar-title">{page==='courses'?'我的课程':page==='chat'?'自由对话':page==='companion'?'持续对话':'设置'}</span>
+          <span className="topbar-title">{page==='courses'?'项目':page==='chat'?'普通对话':page==='companion'?'持续对话':'设置'}</span>
           {page==='chat' && useRetrieval && <span className="topbar-tag">RAG</span>}
           {page==='chat' && useWebSearch && <span className="topbar-tag">联网</span>}
           <div className="topbar-spacer"/>
@@ -621,6 +711,55 @@ export default function App() {
                 <div className="field">
                   <label className="field-label">用户 ID</label>
                   <input className="field-input" value={userId} onChange={e=>setUserId(e.target.value)} placeholder="user1"/>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-card">
+              <div className="settings-card-title">模型 API</div>
+              <div className="field-group">
+                <div className="field">
+                  <label className="field-label">API 地址</label>
+                  <input
+                    className="field-input"
+                    value={providerDraft.api_base_url}
+                    onChange={e => setProviderDraft(v => ({ ...v, api_base_url: e.target.value }))}
+                    placeholder="https://api.deepseek.com"
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label">API Key</label>
+                  <input
+                    className="field-input"
+                    type="password"
+                    autoComplete="off"
+                    value={providerDraft.api_key}
+                    onFocus={() => {
+                      if (providerDraft.api_key === MASKED_KEY_VALUE) {
+                        setProviderDraft(v => ({ ...v, api_key: '' }))
+                      }
+                    }}
+                    onChange={e => setProviderDraft(v => ({ ...v, api_key: e.target.value }))}
+                    placeholder={providerSettings.has_api_key ? '已保存，输入新 Key 可替换' : 'DeepSeek API Key'}
+                  />
+                </div>
+                <div className="provider-model-grid">
+                  <div className="provider-model-item">
+                    <span>轻对话模型</span>
+                    <strong>{providerSettings.fast_model || DEFAULT_PROVIDER_SETTINGS.fast_model}</strong>
+                  </div>
+                  <div className="provider-model-item">
+                    <span>重任务模型</span>
+                    <strong>{providerSettings.heavy_model || DEFAULT_PROVIDER_SETTINGS.heavy_model}</strong>
+                  </div>
+                </div>
+                <div className="field-row">
+                  <button className="ghost-btn" onClick={saveProviderSettings} disabled={savingProvider}>
+                    {savingProvider ? '保存中' : '保存模型 API'}
+                  </button>
+                  <button className="ghost-btn" onClick={() => loadProviderSettings(true)} disabled={savingProvider}>
+                    重新读取
+                  </button>
                 </div>
               </div>
             </div>

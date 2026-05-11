@@ -66,6 +66,7 @@ class CourseItem(BaseModel):
     created_at: Optional[str] = None
     doc_count: int
     cover_document_id: Optional[int] = None
+    project_path: Optional[str] = None
 
 
 class CourseListResponse(BaseModel):
@@ -133,3 +134,8 @@ class TTSRequest(BaseModel):
     text: str = Field(min_length=1)
     voice: str = ""
     speed: float = 1.0
+
+
+class ProviderConfigUpdateRequest(BaseModel):
+    api_base_url: Optional[str] = None
+    api_key: Optional[str] = None

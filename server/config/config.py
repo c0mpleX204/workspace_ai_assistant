@@ -1,7 +1,40 @@
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from server.dialogue.personas import PERSONAS
+
+
+DEFAULT_DEEPSEEK_API_BASE_URL = "https://api.deepseek.com"
+DEFAULT_FAST_MODEL = "deepseek-v4-flash"
+DEFAULT_HEAVY_MODEL = "deepseek-v4-pro"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RUNTIME_PROVIDER_CONFIG_PATH = Path(
+    os.getenv("PROVIDER_CONFIG_PATH", str(PROJECT_ROOT / "data" / "runtime" / "provider_config.json"))
+)
+
+
+def _load_runtime_provider_config() -> dict[str, Any]:
+    try:
+        if not RUNTIME_PROVIDER_CONFIG_PATH.is_file():
+            return {}
+        data = json.loads(RUNTIME_PROVIDER_CONFIG_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+_RUNTIME_PROVIDER_CONFIG = _load_runtime_provider_config()
+
+
+def _provider_value(key: str, env_name: str, default: str) -> str:
+    env_value = os.getenv(env_name)
+    if env_value is not None:
+        return env_value
+    value = _RUNTIME_PROVIDER_CONFIG.get(key, default)
+    return str(value or "")
 
 
 @dataclass
@@ -17,9 +50,15 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "info")
 
     # Primary chat model (OpenAI-compatible)
-    remote_primary_api_base_url: str = os.getenv("REMOTE_PRIMARY_API_BASE_URL", "https://api.siliconflow.cn/v1")
-    remote_primary_api_key: str = os.getenv("REMOTE_PRIMARY_API_KEY", "")
-    remote_primary_model: str = os.getenv("REMOTE_PRIMARY_MODEL", "Pro/deepseek-ai/DeepSeek-V3.2")
+    remote_primary_api_base_url: str = _provider_value(
+        "api_base_url",
+        "REMOTE_PRIMARY_API_BASE_URL",
+        DEFAULT_DEEPSEEK_API_BASE_URL,
+    )
+    remote_primary_api_key: str = _provider_value("api_key", "REMOTE_PRIMARY_API_KEY", "")
+    remote_fast_model: str = _provider_value("fast_model", "REMOTE_FAST_MODEL", DEFAULT_FAST_MODEL)
+    remote_heavy_model: str = _provider_value("heavy_model", "REMOTE_HEAVY_MODEL", DEFAULT_HEAVY_MODEL)
+    remote_primary_model: str = _provider_value("primary_model", "REMOTE_PRIMARY_MODEL", remote_fast_model)
 
     # Embedding
     embedding_api_base_url: str = os.getenv("EMBEDDING_API_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -28,7 +67,7 @@ class Settings:
     embedding_timeout_sec: int = int(os.getenv("EMBEDDING_TIMEOUT_SEC", "60"))
 
     # Vision fallback model
-    remote_vision_model: str = os.getenv("REMOTE_VISION_MODEL", "Pro/moonshotai/Kimi-K2.5")
+    remote_vision_model: str = os.getenv("REMOTE_VISION_MODEL", remote_heavy_model)
 
     # STT
     stt_provider: str = os.getenv("STT_PROVIDER", "sherpa_sense_voice")
@@ -123,3 +162,65 @@ class Settings:
 
 
 settings = Settings()
+
+
+def mask_secret(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return "••••"
+    return f"{text[:3]}••••{text[-4:]}"
+
+
+def get_provider_config_public() -> dict[str, Any]:
+    return {
+        "api_base_url": settings.remote_primary_api_base_url,
+        "api_key_masked": mask_secret(settings.remote_primary_api_key),
+        "has_api_key": bool(settings.remote_primary_api_key),
+        "fast_model": settings.remote_fast_model,
+        "heavy_model": settings.remote_heavy_model,
+        "primary_model": settings.remote_primary_model,
+        "config_path": str(RUNTIME_PROVIDER_CONFIG_PATH),
+    }
+
+
+def save_provider_config(
+    *,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    current = _load_runtime_provider_config()
+    incoming_key = None if api_key is None else str(api_key).strip()
+    if incoming_key and set(incoming_key) <= {"•", "*", "."}:
+        incoming_key = None
+    next_config = {
+        "api_base_url": str(
+            api_base_url
+            if api_base_url is not None
+            else current.get("api_base_url", settings.remote_primary_api_base_url)
+        ).strip().rstrip("/"),
+        "api_key": (
+            incoming_key
+            if incoming_key is not None
+            else str(current.get("api_key", settings.remote_primary_api_key) or "")
+        ),
+        "fast_model": DEFAULT_FAST_MODEL,
+        "heavy_model": DEFAULT_HEAVY_MODEL,
+        "primary_model": DEFAULT_FAST_MODEL,
+    }
+    if not next_config["api_base_url"]:
+        next_config["api_base_url"] = DEFAULT_DEEPSEEK_API_BASE_URL
+
+    RUNTIME_PROVIDER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RUNTIME_PROVIDER_CONFIG_PATH.write_text(
+        json.dumps(next_config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    settings.remote_primary_api_base_url = next_config["api_base_url"]
+    settings.remote_primary_api_key = next_config["api_key"]
+    settings.remote_fast_model = next_config["fast_model"]
+    settings.remote_heavy_model = next_config["heavy_model"]
+    settings.remote_primary_model = next_config["primary_model"]
+    return get_provider_config_public()

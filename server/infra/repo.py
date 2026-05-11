@@ -114,7 +114,7 @@ def list_chunks_emb_multi(
     placeholders = ",".join(["%s"] * len(document_ids))
     sql = f"""
     select c.id as chunk_id, c.document_id, c.content,
-           c.embedding, c.page_no, d.title as document_title
+           c.embedding, c.page_no, d.title as document_title, d.source_path
     from chunks c join documents d on d.id = c.document_id
     where c.embedding is not null
       and c.document_id in ({placeholders})
@@ -134,6 +134,7 @@ def list_chunks_emb_multi(
             "embedding": r[3],
             "page_no": r[4],
             "document_title": r[5],
+            "source_path": r[6],
         }
         for r in rows
     ]
@@ -141,7 +142,7 @@ def list_chunks_emb_multi(
 def list_chunks_emb(document_id:int | None =None,limit:int=2000)->list[dict[str,Any]]:
     sql = """
     select c.id as chunk_id, c.document_id,c.content,
-    c.embedding,c.page_no,d.title as document_title
+    c.embedding,c.page_no,d.title as document_title,d.source_path
     from chunks c join documents d on d.id = c.document_id
     where c.embedding is not null
     """
@@ -164,6 +165,7 @@ def list_chunks_emb(document_id:int | None =None,limit:int=2000)->list[dict[str,
                     "embedding":row[3],
                     "page_no":row[4],
                     "document_title":row[5],
+                    "source_path":row[6],
                 })
     return result
 

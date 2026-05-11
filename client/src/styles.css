@@ -416,6 +416,17 @@ body {
   white-space: nowrap; flex-shrink: 0;
   font-weight: var(--font-weight-medium);
 }
+.ref-path {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(520px, 70vw);
+}
 
 /* ===== Delegated Result Box ===== */
 .delegated-result-box {
@@ -660,6 +671,31 @@ body {
   font-family: var(--font-sans);
   cursor: pointer;
   appearance: auto;
+}
+.provider-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.provider-model-item {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.provider-model-item span {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+.provider-model-item strong {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 .settings-section-title {
   font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);

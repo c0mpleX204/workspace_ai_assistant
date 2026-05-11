@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict
 
+from server.config.config import settings
 from server.services.model_service import smart_model_dispatch
 
 
-FAST_MODEL = os.getenv("COMPANION_FAST_MODEL", "Pro/Qwen/Qwen2.5-7B-Instruct").strip()
+FAST_MODEL = os.getenv("COMPANION_FAST_MODEL", settings.remote_fast_model).strip()
 CLASSIFIER_ON = (
     os.getenv("COMPANION_ROUTE_CLASSIFIER_ENABLED", "true").strip().lower() == "true"
 )
