@@ -3,6 +3,7 @@ import os
 from typing import List
 
 from server.dialogue.personas import PERSONAS
+from server.dialogue.prompts import DEFAULT_COMPANION_PERSONA_PROMPT, DEFAULT_PERSONA_ID
 from server.infra.repo import get_user_pref, upsert_user_preference
 
 
@@ -53,7 +54,7 @@ def save_persona_lock(user_id: str, session_id: str, persona_id: str) -> None:
 def resolve_persona_id(user_id: str, session_id: str, requested_persona_id: str) -> str:
     cleaned = (requested_persona_id or "").strip()
     if not LOCK_ON:
-        return cleaned if cleaned not in {"", "default_companion"} else "student_friend"
+        return cleaned if cleaned not in {"", "default_companion"} else DEFAULT_PERSONA_ID
 
     locked = SESSION_LOCKS.get(session_id)
     if not locked:
@@ -64,7 +65,7 @@ def resolve_persona_id(user_id: str, session_id: str, requested_persona_id: str)
     if cleaned in {"", "default_companion"} and locked:
         return locked
 
-    resolved = cleaned if cleaned not in {"", "default_companion"} else (locked or "student_friend")
+    resolved = cleaned if cleaned not in {"", "default_companion"} else (locked or DEFAULT_PERSONA_ID)
     SESSION_LOCKS[session_id] = resolved
     if resolved != locked:
         save_persona_lock(user_id, session_id, resolved)
@@ -77,11 +78,7 @@ def resolve_persona_prompt(persona_id: str) -> str:
         prompt = str(card.get("system_prompt", "")).strip()
         if prompt:
             return prompt
-    return (
-        "你是实时桌面陪伴助手。语气温和、简洁、稳定。"
-        "先回应用户情绪，再给简短建议。"
-        "不编造事实，不突然切换人格。"
-    )
+    return DEFAULT_COMPANION_PERSONA_PROMPT
 
 
 def build_style_anchor(messages: List[object], *, keep_n: int = 2) -> str:

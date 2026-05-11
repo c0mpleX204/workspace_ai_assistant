@@ -48,7 +48,13 @@ function Message({ m }) {
   )
 }
 
-export default function CourseChatPage({ course, backendUrl, userId, sessionId, showToast, onBack }) {
+function buildThreadTitle(messages) {
+  const firstUser = (messages || []).find(x => x?.role === 'user' && String(x?.content || '').trim())
+  if (!firstUser) return ''
+  return String(firstUser.content || '').trim().replace(/\s+/g, ' ').slice(0, 18)
+}
+
+export default function CourseChatPage({ course, backendUrl, userId, sessionId, showToast, onBack, onThreadTitleChange }) {
   const [materials, setMaterials] = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [previewDocId, setPreviewDocId] = useState(null)
@@ -62,16 +68,16 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
   const [uploadState, setUploadState] = useState({ title: '', file: null })
   const [uploadProgress, setUploadProgress] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
-  const [leftPaneWidth, setLeftPaneWidth] = useState(300)
-  const [middlePaneWidth, setMiddlePaneWidth] = useState(540)
+  const [leftPaneWidth, setLeftPaneWidth] = useState(320)
   const [resizing, setResizing] = useState(null)
-  const [previewError, setPreviewError] = useState('')
 
   const layoutRef = useRef(null)
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const composerRef = useRef(null)
-  const chatSessionId = `course_${course.course_id}_${sessionId || 'default'}`
+  const chatSessionId = String(sessionId || '').startsWith('course_')
+    ? String(sessionId)
+    : `course_${course.course_id}_${sessionId || 'default'}`
 
   useEffect(() => { fetchMaterials() }, [course.course_id])
   useEffect(() => {
@@ -83,7 +89,10 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
         const res = await getChatSessionApi(backendUrl, chatSessionId, userId)
         if (cancelled) return
         const stored = Array.isArray(res.messages) ? res.messages : []
-        setMessages(stored.filter(m => m?.role === 'user' || m?.role === 'assistant'))
+        const visibleMessages = stored.filter(m => m?.role === 'user' || m?.role === 'assistant')
+        setMessages(visibleMessages)
+        const title = buildThreadTitle(visibleMessages) || (res.title === 'New chat' ? '' : res.title)
+        if (title) onThreadTitleChange?.(course.course_id, chatSessionId, title)
       } catch (e) {
         void e
       }
@@ -101,6 +110,15 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
   }, [input])
 
   useEffect(() => {
+    if (!previewDocId) return
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setPreviewDocId(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [previewDocId])
+
+  useEffect(() => {
     if (!resizing) return
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
@@ -111,13 +129,8 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
       const rect = root.getBoundingClientRect()
       const x = e.clientX - rect.left
 
-      if (resizing === 'left') {
-        setLeftPaneWidth(Math.max(240, Math.min(460, x)))
-      } else {
-        const rightMin = 360
-        const nextMiddleEnd = Math.max(leftPaneWidth + 360, Math.min(rect.width - rightMin, x))
-        setMiddlePaneWidth(nextMiddleEnd - leftPaneWidth - 8)
-      }
+      const maxLeft = Math.max(280, Math.min(520, rect.width - 460))
+      setLeftPaneWidth(Math.max(260, Math.min(maxLeft, x)))
     }
 
     const onUp = () => {
@@ -135,13 +148,12 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
     }
-  }, [resizing, leftPaneWidth])
+  }, [resizing])
 
   async function fetchMaterials() {
     try {
       const res = await listMaterialsApi(backendUrl, course.course_id)
       setMaterials(res.items || [])
-      if (!previewDocId && res.items?.length) setPreviewDocId(res.items[0].document_id)
     } catch (e) {
       showToast('获取资料失败', 'error')
     }
@@ -191,6 +203,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
 
       const resp = await chatApi(backendUrl, payload)
       setMessages(m => [...m, { role: 'assistant', content: resp.reply, refs: resp.reference || [] }])
+      onThreadTitleChange?.(course.course_id, chatSessionId, buildThreadTitle([userMsg]) || text)
       if (resp.latency_ms) setLastLatency(resp.latency_ms)
     } catch (err) {
       setMessages(m => [...m, { role: 'assistant', content: '请求失败：' + (err?.message || err) }])
@@ -246,6 +259,7 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
 
   const canSend = (input.trim() || pendingImages.length > 0) && !loading
   const useRetrieval = selectedIds.size > 0
+  const previewMaterial = materials.find(mat => mat.document_id === previewDocId)
 
   return (
     <div className={`course-chat-layout${resizing ? " is-resizing" : ""}`} ref={layoutRef}>
@@ -298,25 +312,6 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
       </div>
 
       <div className="pane-resizer" onMouseDown={(e) => { e.preventDefault(); setResizing('left') }} />
-
-      <div className="course-chat-middle" style={{ width: middlePaneWidth, minWidth: middlePaneWidth, maxWidth: middlePaneWidth }}>
-        <div className="preview-topbar">
-            <span>项目文件预览</span>
-          {previewDocId && <button className="ghost-btn small" onClick={() => setPreviewDocId(null)}>关闭预览</button>}
-        </div>
-        {previewDocId ? (
-          <iframe className="preview-iframe" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1`} title="preview" />
-        ) : (
-          <div className="preview-empty">
-            <div style={{textAlign:'center'}}>
-              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>📄</div>
-              <div>点击左侧资料名称开始预览</div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="pane-resizer" onMouseDown={(e) => { e.preventDefault(); setResizing('middle') }} />
 
       <div className="course-chat-right">
         <div className="chat-panel">
@@ -383,6 +378,23 @@ export default function CourseChatPage({ course, backendUrl, userId, sessionId, 
           </div>
         </div>
       </div>
+
+      {previewDocId && (
+        <div className="preview-modal-backdrop" onClick={() => setPreviewDocId(null)}>
+          <div className="preview-modal" onClick={e => e.stopPropagation()}>
+            <div className="preview-modal-head">
+              <div className="preview-modal-title">
+                <span>项目文件预览</span>
+                <strong title={previewMaterial?.source_path || previewMaterial?.title || ''}>
+                  {previewMaterial?.title || `文件 ${previewDocId}`}
+                </strong>
+              </div>
+              <button className="preview-modal-close" onClick={() => setPreviewDocId(null)} title="关闭预览">×</button>
+            </div>
+            <iframe className="preview-modal-frame" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1`} title="project file preview" />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

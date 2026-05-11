@@ -1,6 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { chatApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi } from './api'
-import CoursesPage from './CoursesPage'
+import { chatApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi } from './api'
 import CourseChatPage from './CourseChatPage'
 import './styles.css'
 
@@ -173,14 +172,16 @@ function TypingIndicator() {
 }
 
 const THREAD_KEY_PREFIX = 'desktop_chat_threads_v1:'
+const PROJECT_THREAD_KEY_PREFIX = 'project_chat_threads_v1:'
 const THREAD_DEFAULT_TITLE = '新对话'
 const MASKED_KEY_VALUE = '••••••••'
+const PROVIDER_API_PLACEHOLDER = 'https://api.deepseek.com'
 const DEFAULT_PROVIDER_SETTINGS = {
-  api_base_url: 'https://api.deepseek.com',
+  api_base_url: '',
   api_key_masked: '',
   has_api_key: false,
-  fast_model: 'deepseek-v4-flash',
-  heavy_model: 'deepseek-v4-pro',
+  fast_model: '',
+  heavy_model: '',
 }
 
 function buildChatThreadTitle(messages) {
@@ -188,6 +189,12 @@ function buildChatThreadTitle(messages) {
   if (!firstUser) return THREAD_DEFAULT_TITLE
   const text = String(firstUser.content || '').trim().replace(/\s+/g, ' ')
   return text.slice(0, 18) || THREAD_DEFAULT_TITLE
+}
+
+function normalizeThreadTitle(value, fallback = THREAD_DEFAULT_TITLE) {
+  const text = String(value || '').trim()
+  if (!text || text === 'New chat') return fallback
+  return text
 }
 
 function createChatThread(id = '') {
@@ -201,6 +208,16 @@ function createChatThread(id = '') {
   }
 }
 
+function createProjectChatThread(courseId, id = '') {
+  const now = Date.now()
+  return {
+    id: id || `course_${courseId}_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    title: THREAD_DEFAULT_TITLE,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
 function normalizeChatThreads(raw) {
   if (!Array.isArray(raw)) return []
   const cleaned = raw
@@ -209,13 +226,31 @@ function normalizeChatThreads(raw) {
       const msgs = Array.isArray(x.messages) ? x.messages : []
       return {
         id: String(x.id),
-        title: String(x.title || '').trim() || buildChatThreadTitle(msgs),
+        title: normalizeThreadTitle(x.title, buildChatThreadTitle(msgs)),
         messages: msgs,
         createdAt: Number(x.createdAt || Date.now()),
         updatedAt: Number(x.updatedAt || Date.now()),
       }
     })
   return cleaned
+}
+
+function normalizeProjectThreads(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const result = {}
+  for (const [courseId, items] of Object.entries(raw)) {
+    if (!Array.isArray(items)) continue
+    const cleaned = items
+      .filter(x => x && typeof x.id === 'string' && x.id.trim())
+      .map(x => ({
+        id: String(x.id),
+        title: normalizeThreadTitle(x.title),
+        createdAt: Number(x.createdAt || Date.now()),
+        updatedAt: Number(x.updatedAt || Date.now()),
+      }))
+    if (cleaned.length > 0) result[String(courseId)] = cleaned
+  }
+  return result
 }
 
 // ===== 主应用 =====
@@ -225,14 +260,19 @@ export default function App() {
   const [userId, setUserId] = useState('user1')
   const [providerSettings, setProviderSettings] = useState(DEFAULT_PROVIDER_SETTINGS)
   const [providerDraft, setProviderDraft] = useState({
-    api_base_url: DEFAULT_PROVIDER_SETTINGS.api_base_url,
+    api_base_url: '',
     api_key: '',
   })
   const [savingProvider, setSavingProvider] = useState(false)
   const [sessionId] = useState('default')
   const [chatThreads, setChatThreads] = useState(() => [createChatThread('chat_default')])
   const [activeThreadId, setActiveChatThreadId] = useState('chat_default')
-  const [page, setPage] = useState('courses')
+  const [courses, setCourses] = useState([])
+  const [coursesLoading, setCoursesLoading] = useState(false)
+  const [projectThreads, setProjectThreads] = useState({})
+  const [projectThreadsLoaded, setProjectThreadsLoaded] = useState(false)
+  const [activeProjectThreadId, setActiveProjectThreadId] = useState('')
+  const [page, setPage] = useState('chat')
   const [activeCourse, setActiveCourse] = useState(null)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -265,6 +305,10 @@ export default function App() {
     () => `${THREAD_KEY_PREFIX}${userId || 'user1'}`,
     [userId],
   )
+  const projectThreadStoreKey = useMemo(
+    () => `${PROJECT_THREAD_KEY_PREFIX}${userId || 'user1'}`,
+    [userId],
+  )
   const activeThread = useMemo(
     () => chatThreads.find(x => x.id === activeThreadId) || chatThreads[0] || createChatThread('chat_default'),
     [chatThreads, activeThreadId],
@@ -273,6 +317,16 @@ export default function App() {
   const sortedThreads = useMemo(
     () => [...chatThreads].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)),
     [chatThreads],
+  )
+  const activeCourseId = activeCourse ? String(activeCourse.course_id) : ''
+  const activeProjectThreads = activeCourseId ? (projectThreads[activeCourseId] || []) : []
+  const sortedProjectThreads = useMemo(
+    () => [...activeProjectThreads].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)),
+    [activeProjectThreads],
+  )
+  const activeProjectThread = useMemo(
+    () => activeProjectThreads.find(x => x.id === activeProjectThreadId) || activeProjectThreads[0] || null,
+    [activeProjectThreads, activeProjectThreadId],
   )
 
   useEffect(() => {
@@ -303,6 +357,60 @@ export default function App() {
       void e
     }
   }, [threadStoreKey, chatThreads])
+
+  useEffect(() => {
+    setProjectThreadsLoaded(false)
+    try {
+      const raw = localStorage.getItem(projectThreadStoreKey)
+      const parsed = raw ? JSON.parse(raw) : {}
+      setProjectThreads(normalizeProjectThreads(parsed))
+      setProjectThreadsLoaded(true)
+    } catch (e) {
+      void e
+      setProjectThreads({})
+      setProjectThreadsLoaded(true)
+    }
+  }, [projectThreadStoreKey])
+
+  useEffect(() => {
+    if (!projectThreadsLoaded) return
+    try {
+      localStorage.setItem(projectThreadStoreKey, JSON.stringify(projectThreads))
+    } catch (e) {
+      void e
+    }
+  }, [projectThreadStoreKey, projectThreads, projectThreadsLoaded])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCourses() {
+      setCoursesLoading(true)
+      try {
+        const res = await listCoursesApi(backendUrl, userId)
+        if (cancelled) return
+        const items = res.items || []
+        setCourses(items)
+        setProjectThreads(prev => {
+          const next = { ...prev }
+          for (const course of items) {
+            const key = String(course.course_id)
+            if (!Array.isArray(next[key]) || next[key].length === 0) {
+              next[key] = [createProjectChatThread(course.course_id, `course_${course.course_id}_${sessionId || 'default'}`)]
+            }
+          }
+          return next
+        })
+      } catch (e) {
+        if (!cancelled) showToast('获取项目失败: ' + (e?.message || e), 'error')
+      } finally {
+        if (!cancelled) setCoursesLoading(false)
+      }
+    }
+
+    loadCourses()
+    return () => { cancelled = true }
+  }, [backendUrl, userId, sessionId, showToast])
 
   useEffect(() => {
     if (page !== 'chat' || !activeThreadId || messages.length > 0) return
@@ -348,7 +456,7 @@ export default function App() {
       const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
       setProviderSettings(provider)
       setProviderDraft({
-        api_base_url: provider.api_base_url || DEFAULT_PROVIDER_SETTINGS.api_base_url,
+        api_base_url: provider.api_base_url || '',
         api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
       })
     } catch (e) {
@@ -374,7 +482,7 @@ export default function App() {
       const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
       setProviderSettings(provider)
       setProviderDraft({
-        api_base_url: provider.api_base_url || DEFAULT_PROVIDER_SETTINGS.api_base_url,
+        api_base_url: provider.api_base_url || '',
         api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
       })
       showToast('模型 API 设置已保存', 'success')
@@ -403,9 +511,92 @@ export default function App() {
     const thread = createChatThread()
     setChatThreads(prev => [thread, ...prev])
     setActiveChatThreadId(thread.id)
+    setActiveCourse(null)
+    setPage('chat')
     setInput('')
     setPendingImages([])
     setLastLatency(null)
+  }
+
+  function openThread(threadId) {
+    setActiveChatThreadId(threadId)
+    setActiveCourse(null)
+    setPage('chat')
+    setInput('')
+    setPendingImages([])
+    setLastLatency(null)
+  }
+
+  function openProject(course, threadId = '') {
+    const key = String(course.course_id)
+    const existing = projectThreads[key] || []
+    const thread = existing.find(x => x.id === threadId) || existing[0] || createProjectChatThread(course.course_id, `course_${course.course_id}_${sessionId || 'default'}`)
+    if (existing.length === 0) {
+      setProjectThreads(prev => ({ ...prev, [key]: [thread] }))
+    }
+    setActiveCourse(course)
+    setActiveProjectThreadId(thread.id)
+    setPage('course_chat')
+    setInput('')
+    setPendingImages([])
+    setLastLatency(null)
+  }
+
+  function newProjectThread(course) {
+    const key = String(course.course_id)
+    const thread = createProjectChatThread(course.course_id)
+    setProjectThreads(prev => ({ ...prev, [key]: [thread, ...(prev[key] || [])] }))
+    setActiveCourse(course)
+    setActiveProjectThreadId(thread.id)
+    setPage('course_chat')
+    setInput('')
+    setPendingImages([])
+    setLastLatency(null)
+  }
+
+  async function createProjectFromSidebar() {
+    const name = window.prompt('新项目名称')
+    if (!name || !name.trim()) return
+    try {
+      const created = await createCourseApi(backendUrl, {
+        name: name.trim(),
+        term: null,
+        owner_id: userId,
+      })
+      const course = created || {}
+      const normalized = {
+        ...course,
+        course_id: course.course_id,
+        name: course.name || name.trim(),
+        doc_count: course.doc_count || 0,
+      }
+      setCourses(prev => [normalized, ...prev])
+      const thread = createProjectChatThread(normalized.course_id, `course_${normalized.course_id}_${sessionId || 'default'}`)
+      setProjectThreads(prev => ({ ...prev, [String(normalized.course_id)]: [thread] }))
+      setActiveCourse(normalized)
+      setActiveProjectThreadId(thread.id)
+      setPage('course_chat')
+      setInput('')
+      setPendingImages([])
+      setLastLatency(null)
+      showToast('项目已创建', 'success')
+    } catch (e) {
+      showToast('创建项目失败: ' + (e?.message || e), 'error')
+    }
+  }
+
+  function updateProjectThreadTitle(courseId, threadId, title) {
+    const text = String(title || '').trim()
+    if (!courseId || !threadId || !text || text === 'New chat') return
+    const key = String(courseId)
+    setProjectThreads(prev => ({
+      ...prev,
+      [key]: (prev[key] || []).map(thread => (
+        thread.id === threadId
+          ? { ...thread, title: text, updatedAt: Date.now() }
+          : thread
+      )),
+    }))
   }
 
   function clearThread() {
@@ -564,38 +755,103 @@ export default function App() {
 
   const canSend = (input.trim() || pendingImages.length > 0) && !loading
 
-  const SidebarNav = () => (
-    <div className="sidebar">
-      <div className="sidebar-logo" title="校园学习助手"><IconLogo /></div>
-      <button className={`sidebar-btn ${page==='courses'?'active':''}`} title="项目" onClick={() => setPage('courses')}><IconBook /></button>
-      <button className={`sidebar-btn ${page==='chat'?'active':''}`} title="普通对话" onClick={() => setPage('chat')}><IconChat /></button>
-      <button className={`sidebar-btn ${page==='companion'?'active':''}`} title="持续对话" onClick={() => setPage('companion')}><IconCompanion /></button>
-      <div className="sidebar-spacer" />
-      <button className={`sidebar-btn ${page==='settings'?'active':''}`} title="设置" onClick={() => setPage('settings')}><IconSettings /></button>
-    </div>
-  )
-
-  if (page === 'course_chat' && activeCourse) {
-    return (
-      <div className="app">
-        <SidebarNav />
-        <div className="main" style={{overflow:'hidden'}}>
-          <CourseChatPage course={activeCourse} backendUrl={backendUrl} userId={userId} sessionId={sessionId} showToast={showToast} onBack={() => setPage('courses')} />
+  const WorkspaceSidebar = () => (
+    <aside className="workspace-sidebar">
+      <div className="workspace-brand">
+        <div className="workspace-logo"><IconLogo /></div>
+        <div>
+          <div className="workspace-title">Workspace</div>
+          <div className="workspace-subtitle">{userId || 'user1'}</div>
         </div>
-        <div className={`toast ${toast.type} ${toast.visible?'show':''}`}>{toast.msg}</div>
       </div>
-    )
-  }
+
+      <button className="workspace-new-btn" onClick={newThread}>
+        <span>+</span>
+        <span>新对话</span>
+      </button>
+
+      <div className="workspace-scroll">
+        <div className="workspace-section">
+          <div className="workspace-section-title">无项目</div>
+          <div className="workspace-thread-list">
+            {sortedThreads.map(thread => (
+              <button
+                key={thread.id}
+                className={`workspace-thread ${page === 'chat' && activeThreadId === thread.id ? 'active' : ''}`}
+                onClick={() => openThread(thread.id)}
+                title={thread.title || THREAD_DEFAULT_TITLE}
+              >
+                <IconChat />
+                <span>{thread.title || THREAD_DEFAULT_TITLE}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="workspace-section">
+          <div className="workspace-section-head">
+            <span className="workspace-section-title">项目</span>
+            <button className="workspace-icon-btn" onClick={createProjectFromSidebar} title="新建项目">+</button>
+          </div>
+          {coursesLoading && <div className="workspace-empty">加载项目中...</div>}
+          {!coursesLoading && courses.length === 0 && <div className="workspace-empty">暂无项目</div>}
+          {courses.map(course => {
+            const key = String(course.course_id)
+            const threads = projectThreads[key] || []
+            const isActiveProject = page === 'course_chat' && activeCourse?.course_id === course.course_id
+            return (
+              <div className={`workspace-project ${isActiveProject ? 'active' : ''}`} key={course.course_id}>
+                <div className="workspace-project-row">
+                  <button className="workspace-project-main" onClick={() => openProject(course)} title={course.project_path || course.name}>
+                    <IconBook />
+                    <span>{course.name}</span>
+                  </button>
+                  <button className="workspace-icon-btn" onClick={() => newProjectThread(course)} title="新建项目对话">+</button>
+                </div>
+                <div className="workspace-thread-list project-thread-list">
+                  {(threads.length ? threads : [createProjectChatThread(course.course_id, `course_${course.course_id}_${sessionId || 'default'}`)]).map(thread => (
+                    <button
+                      key={thread.id}
+                      className={`workspace-thread nested ${isActiveProject && activeProjectThreadId === thread.id ? 'active' : ''}`}
+                      onClick={() => openProject(course, thread.id)}
+                      title={thread.title || THREAD_DEFAULT_TITLE}
+                    >
+                      <IconChat />
+                      <span>{thread.title || THREAD_DEFAULT_TITLE}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="workspace-bottom">
+        <button className={`workspace-nav-btn ${page === 'companion' ? 'active' : ''}`} onClick={() => setPage('companion')}>
+          <IconCompanion />
+          <span>陪伴聊天</span>
+        </button>
+        <button className={`workspace-nav-btn ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}>
+          <IconSettings />
+          <span>设置</span>
+        </button>
+      </div>
+    </aside>
+  )
 
   return (
     <div className="app">
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
-      <SidebarNav />
+      <WorkspaceSidebar />
       <div className="main">
         <div className="topbar">
-          <span className="topbar-title">{page==='courses'?'项目':page==='chat'?'普通对话':page==='companion'?'持续对话':'设置'}</span>
+          <span className="topbar-title">
+            {page==='course_chat' ? (activeCourse?.name || '项目对话') : page==='chat' ? '无项目对话' : page==='companion' ? '陪伴聊天' : '设置'}
+          </span>
           {page==='chat' && useRetrieval && <span className="topbar-tag">RAG</span>}
           {page==='chat' && useWebSearch && <span className="topbar-tag">联网</span>}
+          {page==='course_chat' && activeProjectThread && <span className="topbar-tag">{activeProjectThread.title || THREAD_DEFAULT_TITLE}</span>}
           <div className="topbar-spacer"/>
           {(page==='chat' || page==='companion') && (
             <span className={`topbar-status ${loading?'loading':''}`}>
@@ -612,25 +868,8 @@ export default function App() {
           )}
         </div>
 
-        {page==='courses' && <CoursesPage backendUrl={backendUrl} userId={userId} showToast={showToast} onEnterCourse={c=>{setActiveCourse(c);setPage('course_chat')}} />}
-
         {page==='chat' && (
           <>
-            <div className="chat-thread-bar">
-              <select
-                className="chat-thread-select"
-                value={activeThreadId}
-                onChange={e => setActiveChatThreadId(e.target.value)}
-              >
-                {sortedThreads.map(t => (
-                  <option key={t.id} value={t.id}>
-                    {t.title || THREAD_DEFAULT_TITLE}
-                  </option>
-                ))}
-              </select>
-              <button className="ghost-btn small" onClick={newThread}>+ 新对话</button>
-              <button className="ghost-btn small" onClick={clearThread} disabled={messages.length === 0}>清空当前</button>
-            </div>
             <div className="chat-area">
               {messages.length===0 && <div className="chat-empty"><div className="chat-empty-icon"><IconChat/></div><p>发送消息开始对话，支持图片和语音输入</p></div>}
               {messages.map((m,i)=><Message key={i} m={m} onImageClick={src => setLightboxSrc(src)} onTts={handleTtsPlay}/>)}
@@ -682,6 +921,21 @@ export default function App() {
           </>
         )}
 
+        {page==='course_chat' && activeCourse && activeProjectThread && (
+          <div className="course-chat-shell">
+            <CourseChatPage
+              key={`${activeCourse.course_id}:${activeProjectThread.id}`}
+              course={activeCourse}
+              backendUrl={backendUrl}
+              userId={userId}
+              sessionId={activeProjectThread.id}
+              showToast={showToast}
+              onBack={() => setPage('chat')}
+              onThreadTitleChange={updateProjectThreadTitle}
+            />
+          </div>
+        )}
+
 
 
         {page==='companion' && (
@@ -724,7 +978,7 @@ export default function App() {
                     className="field-input"
                     value={providerDraft.api_base_url}
                     onChange={e => setProviderDraft(v => ({ ...v, api_base_url: e.target.value }))}
-                    placeholder="https://api.deepseek.com"
+                    placeholder={PROVIDER_API_PLACEHOLDER}
                   />
                 </div>
                 <div className="field">
@@ -746,11 +1000,11 @@ export default function App() {
                 <div className="provider-model-grid">
                   <div className="provider-model-item">
                     <span>轻对话模型</span>
-                    <strong>{providerSettings.fast_model || DEFAULT_PROVIDER_SETTINGS.fast_model}</strong>
+                    <strong>{providerSettings.fast_model || '后端读取中'}</strong>
                   </div>
                   <div className="provider-model-item">
                     <span>重任务模型</span>
-                    <strong>{providerSettings.heavy_model || DEFAULT_PROVIDER_SETTINGS.heavy_model}</strong>
+                    <strong>{providerSettings.heavy_model || '后端读取中'}</strong>
                   </div>
                 </div>
                 <div className="field-row">

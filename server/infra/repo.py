@@ -139,10 +139,10 @@ def list_chunks_emb_multi(
         for r in rows
     ]
 
-def list_chunks_emb(document_id:int | None =None,limit:int=2000)->list[dict[str,Any]]:
+def list_chunks_emb(document_id: int | None = None, limit: int = 2000) -> list[dict[str, Any]]:
     sql = """
-    select c.id as chunk_id, c.document_id,c.content,
-    c.embedding,c.page_no,d.title as document_title,d.source_path
+    select c.id as chunk_id, c.document_id, c.content,
+           c.embedding, c.page_no, d.title as document_title, d.source_path
     from chunks c join documents d on d.id = c.document_id
     where c.embedding is not null
     """
@@ -155,32 +155,19 @@ def list_chunks_emb(document_id:int | None =None,limit:int=2000)->list[dict[str,
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
-            rows=cur.fetchall()
-            result=[]
-            for row in rows:
-                result.append({
-                    "chunk_id":row[0],
-                    "document_id":row[1],
-                    "content":row[2],
-                    "embedding":row[3],
-                    "page_no":row[4],
-                    "document_title":row[5],
-                    "source_path":row[6],
-                })
-    return result
-
-def create_course(name: str, term: str | None = None, owner_id: str = "default_user") -> int:
-    sql = """
-    insert into courses (name, term, owner_id)
-    values (%s, %s, %s)
-    returning id
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (name, term, owner_id))
-            row = cur.fetchone()
-            return int(row[0])
-
+            rows = cur.fetchall()
+    return [
+        {
+            "chunk_id": row[0],
+            "document_id": row[1],
+            "content": row[2],
+            "embedding": row[3],
+            "page_no": row[4],
+            "document_title": row[5],
+            "source_path": row[6],
+        }
+        for row in rows
+    ]
 
 def create_document(course_id: int, title: str, file_type: str, source_path: str) -> int:
     sql = """
@@ -224,11 +211,9 @@ def insert_chunks(document_id: int, chunks: List[Dict[str, Any]]) -> int:
             cur.executemany(sql, rows)
     return len(rows)
 
-def list_documents(course_id: int | None=None , limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
-    limit =int(limit or 20)
-    offset =int(offset or 0)
-    limit= max(1,min(limit,100))
-    offset=max(0,offset)
+def list_documents(course_id: int | None = None, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
+    limit = max(1, min(int(limit or 20), 100))
+    offset = max(0, int(offset or 0))
     sql = """
     select
         d.id,
@@ -305,9 +290,8 @@ def get_document_detail(document_id: int) -> dict[str, Any] | None:
 def delete_doc_chunks(document_id: int) -> bool:
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 鍏堝垹瀛愯〃锛岄伩鍏嶆病鏈夐厤缃骇鑱旂害鏉熸椂鎶ュ閿敊璇?
+            # Delete child rows first for deployments without cascade constraints.
             cur.execute("delete from chunks where document_id = %s", (document_id,))
-            # 鍐嶅垹涓昏〃
             cur.execute("delete from documents where id = %s", (document_id,))
             deleted_count = cur.rowcount
 
@@ -493,10 +477,7 @@ def upsert_learning_progress(
             return cur.rowcount > 0
         
 def list_due_reminders(window_minutes: int = 60, limit: int = 200) -> List[Dict[str, Any]]:
-    """
-    杩斿洖 next_review_at 鍦?now() 鍒?now() + window_minutes 涔嬮棿鐨勮褰曘€?
-    杩斿洖瀛楁鍖呭惈 user_id, course_id, topic, next_review_at, evidence
-    """
+    """Return learning progress due between now and the lookahead window."""
     sql = """
     select user_id, course_id, topic, status, mastery, next_review_at, evidence
     from learning_progress
@@ -525,9 +506,7 @@ def list_due_reminders(window_minutes: int = 60, limit: int = 200) -> List[Dict[
 
 
 def mark_reminder_sent(user_id: str, course_id: int | None, topic: str, at_time) -> bool:
-    """
-    鏇存柊 learning_progress.last_reminded_at锛屼綔涓哄凡鎻愰啋鏍囪瘑銆?
-    """
+    """Mark a learning progress reminder as sent."""
     sql = """
     update learning_progress
     set last_reminded_at = %s, updated_at = now()
@@ -540,9 +519,7 @@ def mark_reminder_sent(user_id: str, course_id: int | None, topic: str, at_time)
 
 
 def list_user_reminders(user_id: str, lookahead_hours: int = 48, limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    杩斿洖鐢ㄦ埛鏈潵 lookahead_hours 灏忔椂鍐呯殑 reminders锛屼緵浼氳瘽娉ㄥ叆浣跨敤銆?
-    """
+    """Return upcoming reminders that can be injected into chat context."""
     sql = """
     select course_id, topic, status, mastery, next_review_at, evidence
     from learning_progress

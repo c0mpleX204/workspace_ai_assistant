@@ -1,6 +1,9 @@
 from typing import Any, Dict, List, Literal, Optional
 
+from fastapi import UploadFile
 from pydantic import BaseModel, Field
+
+MessageRole = Literal["system", "user", "assistant"]
 
 
 class SearchRequest(BaseModel):
@@ -74,8 +77,61 @@ class CourseListResponse(BaseModel):
     total: int
 
 
+class ChatMessage(BaseModel):
+    role: MessageRole
+    content: str = Field(min_length=1)
+
+
+class ChatRequest(BaseModel):
+    user_id: str = "default_user"
+    session_id: str = "default"
+    messages: List[ChatMessage] = Field(min_length=1)
+    use_retrieval: bool = False
+    document_id: Optional[int] = None
+    document_ids: Optional[List[int]] = None
+    use_web_search: bool = False
+    files: Optional[List[UploadFile]] = None
+    image_url: Optional[str] = None
+    audio_url: Optional[str] = None
+
+
+class ReferenceItem(BaseModel):
+    ref_id: str
+    page_no: int | None = None
+    summary: str
+    doucument_title: str
+    score: float | None = None
+    source_path: str | None = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    latency_ms: int
+    reference: List[ReferenceItem] = Field(default_factory=list)
+
+
+class StoredChatMessage(BaseModel):
+    role: MessageRole
+    content: str
+    created_at: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    refs: Optional[List[Dict[str, Any]]] = None
+    images: Optional[List[str]] = None
+
+
+class ChatSessionResponse(BaseModel):
+    user_id: str
+    session_id: str
+    scope: str
+    title: str
+    messages: List[StoredChatMessage] = Field(default_factory=list)
+    compressed_summary: str = ""
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class CompanionMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: MessageRole
     content: str = ""
 
 

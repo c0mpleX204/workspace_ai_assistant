@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from server.dialogue.personas import PERSONAS
+from server.dialogue.prompts import (
+    DEFAULT_COMPANION_SYSTEM_PROMPT_TEMPLATE,
+    DEFAULT_PERSONA_ID,
+    DEFAULT_PERSONA_PROMPT,
+)
 
 
 DEFAULT_DEEPSEEK_API_BASE_URL = "https://api.deepseek.com"
@@ -115,23 +120,13 @@ class Settings:
     tts_timeout_sec: int = int(os.getenv("TTS_TIMEOUT_SEC", "30"))
 
     # Persona
-    persona_id: str = os.getenv("PERSONA_ID", "student_friend")
-    _default_persona_prompt: str = (
-        "你是校园学习伙伴。语气友好、鼓励、简洁。"
-        "回答控制在 3 到 6 句，先结论后行动建议。"
-        "不说教，不阴阳怪气，不输出空泛鸡汤。"
-    )
+    persona_id: str = os.getenv("PERSONA_ID", DEFAULT_PERSONA_ID)
+    _default_persona_prompt: str = DEFAULT_PERSONA_PROMPT
 
     # Companion prompt template
     companion_system_prompt_template: str = os.getenv(
         "COMPANION_SYSTEM_PROMPT_TEMPLATE",
-        (
-            "你是一个实时桌面陪伴助手（persona_id={persona_id}, scene={scene}）。"
-            "请只输出 JSON，不要输出额外解释，格式必须是："
-            "{\"reply\":\"...\",\"tts_text\":\"...\",\"emotion\":\"neutral|smile|sad|angry|surprised\",\"action_intents\":[{\"type\":\"live2d_expression|live2d_motion|live2d_look_at|game_control\",\"payload\":{}}]}。"
-            "reply 给 UI 展示；tts_text 给语音播报（可比 reply 更短）。"
-            "action_intents 可以为空数组。"
-        ),
+        DEFAULT_COMPANION_SYSTEM_PROMPT_TEMPLATE,
     )
     companion_tts_max_chars: int = int(os.getenv("COMPANION_TTS_MAX_CHARS", "120"))
 

@@ -14,6 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from server.config.config import settings
+from server.dialogue.prompts import QUERY_REWRITE_SYSTEM_PROMPT
 from server.memory.conversation_store import (
     DEFAULT_HISTORY_MAX as CHAT_HISTORY_MAX,
     infer_scope,
@@ -98,6 +99,67 @@ def append_error_row(session_id: str, latency_ms: int, error_type: str, detail: 
     if marker in html_text:
         html_text = html_text.replace(marker, row + marker, 1)
         LOG_HTML_PATH.write_text(html_text, encoding="utf-8")
+
+
+def _payload_messages(payload: Any) -> List[Dict[str, str]]:
+    return [
+        m.model_dump()
+        for m in payload.messages
+        if str(getattr(m, "content", "") or "").strip()
+    ]
+
+
+def _insert_system_after_primary(
+    messages: List[Dict[str, str]],
+    system_msg: Dict[str, str],
+    *,
+    marker: str | None = None,
+) -> List[Dict[str, str]]:
+    if marker and any(
+        m.get("role") == "system" and marker in str(m.get("content", ""))
+        for m in messages
+    ):
+        return messages
+
+    first_system_idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
+    if first_system_idx >= 0:
+        return messages[: first_system_idx + 1] + [system_msg] + messages[first_system_idx + 1 :]
+    return [system_msg] + messages
+
+
+def _prepare_conversation(
+    *,
+    user_id: str,
+    session_id: str,
+    raw_messages: List[Dict[str, str]],
+    scope: str,
+    log_label: str,
+) -> tuple[List[Dict[str, str]], str]:
+    merged_messages = merge_dialog(
+        user_id,
+        session_id,
+        raw_messages,
+        scope=scope,
+        limit=CHAT_HISTORY_MAX,
+    )
+    previous_summary = ""
+    try:
+        previous_summary = load_conversation(
+            user_id,
+            session_id,
+            scope=scope,
+            limit=2,
+        ).get("compressed_summary", "")
+        merged_messages, conversation_summary, did_summarize = compact_dialog(
+            merged_messages,
+            str(previous_summary or ""),
+        )
+        if not did_summarize and not conversation_summary:
+            conversation_summary = str(previous_summary or "")
+    except Exception as exc:
+        logging.warning("%s summary compact failed session=%s err=%s", log_label, session_id, exc)
+        conversation_summary = str(previous_summary or "")
+    return merged_messages, conversation_summary
 
 
 def inject_system_prompt(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -447,12 +509,7 @@ def inject_memory_as_system(
         ),
     }
     marker = "【用户记忆（仅作个性化参考）】"
-    if any(m.get("role") == "system" and marker in m.get("content", "") for m in messages):
-        return messages
-    first_system_idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
-    if first_system_idx >= 0:
-        return messages[: first_system_idx + 1] + [memory_msg] + messages[first_system_idx + 1 :]
-    return [memory_msg] + messages
+    return _insert_system_after_primary(messages, memory_msg, marker=marker)
 
 
 def inject_summary_as_system(
@@ -473,10 +530,7 @@ def inject_summary_as_system(
             f"{text}"
         ),
     }
-    first_system_idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
-    if first_system_idx >= 0:
-        return messages[: first_system_idx + 1] + [summary_msg] + messages[first_system_idx + 1 :]
-    return [summary_msg] + messages
+    return _insert_system_after_primary(messages, summary_msg, marker=marker)
 
 
 def get_latest_user_query(messages: List[Dict[str, str]]) -> str:
@@ -507,11 +561,7 @@ def rewrite_retrieval_query(raw_query: str, messages: List[Dict[str, str]]) -> s
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "你是检索查询改写器。请基于用户原始输入和最近对话，"
-                            "改写成一个适合资料检索/联网搜索的中文查询。"
-                            "只输出改写后的查询，不要回答问题，不要解释。"
-                        ),
+                        "content": QUERY_REWRITE_SYSTEM_PROMPT,
                     },
                     {
                         "role": "user",
@@ -623,10 +673,7 @@ def add_recall_ctx(messages: List[Dict[str, str]], context_text: str) -> List[Di
             "4. 不要因为资料里没有提到而拒绝回答用户的任何问题。"
         ),
     }
-    first_system_idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
-    if first_system_idx >= 0:
-        return messages[: first_system_idx + 1] + [retrieval_msg] + messages[first_system_idx + 1 :]
-    return [retrieval_msg] + messages
+    return _insert_system_after_primary(messages, retrieval_msg, marker="以下是检索到的学习资料片段")
 
 
 def retrieve_chunks_multi(
@@ -668,12 +715,27 @@ def add_web_ctx(messages: List[Dict[str, str]], web_context: str) -> List[Dict[s
         ),
     }
     marker = "【联网搜索结果】"
-    if any(marker in m.get("content", "") for m in messages if m.get("role") == "system"):
-        return messages
-    first_sys = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
-    if first_sys >= 0:
-        return messages[: first_sys + 1] + [web_msg] + messages[first_sys + 1 :]
-    return [web_msg] + messages
+    return _insert_system_after_primary(messages, web_msg, marker=marker)
+
+
+def build_final_messages(
+    merged_messages: List[Dict[str, str]],
+    *,
+    conversation_summary: str = "",
+    memory_text: str = "",
+    query: str | None = None,
+    recall_ctx: str = "",
+    web_context: str = "",
+) -> List[Dict[str, str]]:
+    final_messages = inject_system_prompt(merged_messages)
+    final_messages = inject_summary_as_system(final_messages, conversation_summary)
+    if settings.memory_enabled:
+        final_messages = inject_memory_as_system(final_messages, memory_text, query=query)
+    if recall_ctx:
+        final_messages = add_recall_ctx(final_messages, recall_ctx)
+    if web_context:
+        final_messages = add_web_ctx(final_messages, web_context)
+    return final_messages
 
 
 def _build_input_data(payload: Any, final_messages: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -709,35 +771,15 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         if not user_id:
             user_id = "default_user"
         conversation_scope = infer_scope(session_id)
-        raw_messages = [m.model_dump() for m in payload.messages]
-        raw_messages = [m for m in raw_messages if m.get("content")]
-        merged_messages = await run_in_threadpool(
-            merge_dialog,
-            user_id,
-            session_id,
-            raw_messages,
+        raw_messages = _payload_messages(payload)
+        merged_messages, conversation_summary = await run_in_threadpool(
+            _prepare_conversation,
+            user_id=user_id,
+            session_id=session_id,
+            raw_messages=raw_messages,
             scope=conversation_scope,
-            limit=CHAT_HISTORY_MAX,
+            log_label="chat",
         )
-        previous_summary = await run_in_threadpool(
-            lambda: load_conversation(
-                user_id,
-                session_id,
-                scope=conversation_scope,
-                limit=2,
-            ).get("compressed_summary", "")
-        )
-        try:
-            merged_messages, conversation_summary, did_summarize = await run_in_threadpool(
-                compact_dialog,
-                merged_messages,
-                str(previous_summary or ""),
-            )
-            if not did_summarize and not conversation_summary:
-                conversation_summary = str(previous_summary or "")
-        except Exception as exc:
-            logging.warning(f"chat summary compact failed session={session_id} err={exc}")
-            conversation_summary = str(previous_summary or "")
 
         short_mem = get_short_term_memory(
             session_id=session_id,
@@ -841,14 +883,14 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             except Exception as web_exc:
                 logging.warning(f"web search failed: {web_exc}")
 
-        final_messages = inject_system_prompt(merged_messages)
-        final_messages = inject_summary_as_system(final_messages, conversation_summary)
-        if settings.memory_enabled:
-            final_messages = inject_memory_as_system(final_messages, memory_text)
-        if recall_ctx:
-            final_messages = add_recall_ctx(final_messages, recall_ctx)
-        if web_context:
-            final_messages = add_web_ctx(final_messages, web_context)
+        final_messages = build_final_messages(
+            merged_messages,
+            conversation_summary=conversation_summary,
+            memory_text=memory_text,
+            query=query,
+            recall_ctx=recall_ctx,
+            web_context=web_context,
+        )
 
         input_data = _build_input_data(payload, final_messages)
         result = await run_in_threadpool(smart_model_dispatch, input_data)
@@ -901,53 +943,38 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
         user_id = "default_user"
     conversation_scope = infer_scope(session_id)
 
-    raw_messages = [m.model_dump() for m in payload.messages]
-    raw_messages = [m for m in raw_messages if m.get("content")]
-    merged_messages = merge_dialog(
-        user_id,
-        session_id,
-        raw_messages,
+    raw_messages = _payload_messages(payload)
+    merged_messages, conversation_summary = _prepare_conversation(
+        user_id=user_id,
+        session_id=session_id,
+        raw_messages=raw_messages,
         scope=conversation_scope,
-        limit=CHAT_HISTORY_MAX,
+        log_label="chat stream",
     )
+    memory_text = ""
+    query = get_latest_user_query(merged_messages)
     try:
-        previous_summary = load_conversation(
-            user_id,
-            session_id,
-            scope=conversation_scope,
-            limit=2,
-        ).get("compressed_summary", "")
-        merged_messages, conversation_summary, did_summarize = compact_dialog(
-            merged_messages,
-            str(previous_summary or ""),
+        short_mem = get_short_term_memory(
+            session_id=session_id,
+            merged_messages=merged_messages,
+            rounds=settings.short_memory_rounds,
         )
-        if not did_summarize and not conversation_summary:
-            conversation_summary = str(previous_summary or "")
+        memory_text = build_memory_text(
+            short_mem=short_mem,
+            pref_items=[],
+            progress_items=[],
+            pref_top_k=0,
+            progress_top_k=0,
+        )
     except Exception as exc:
-        logging.warning(f"chat stream summary compact failed session={session_id} err={exc}")
-        conversation_summary = ""
+        logging.warning(f"chat_stream memory inject failed: {exc}")
 
-    final_messages = inject_system_prompt(merged_messages)
-    final_messages = inject_summary_as_system(final_messages, conversation_summary)
-
-    if settings.memory_enabled:
-        try:
-            short_mem = get_short_term_memory(
-                session_id=session_id,
-                merged_messages=merged_messages,
-                rounds=settings.short_memory_rounds,
-            )
-            memory_text = build_memory_text(
-                short_mem=short_mem,
-                pref_items=[],
-                progress_items=[],
-                pref_top_k=0,
-                progress_top_k=0,
-            )
-            query = get_latest_user_query(merged_messages)
-            final_messages = inject_memory_as_system(final_messages, memory_text, query=query)
-        except Exception as exc:
-            logging.warning(f"chat_stream memory inject failed: {exc}")
+    final_messages = build_final_messages(
+        merged_messages,
+        conversation_summary=conversation_summary,
+        memory_text=memory_text,
+        query=query,
+    )
 
     def event_gen():
         try:

@@ -48,7 +48,7 @@ class CompanionRoute(str, Enum):
 
 
 @dataclass(slots=True)
-class IntentDecision:
+class CompanionIntentDecision:
     intent: CompanionIntentType
     route: CompanionRoute
     confidence: float
@@ -56,10 +56,10 @@ class IntentDecision:
     matched_rule: str = ""
 
 
-def analyze_intent(user_text: str, has_media: bool) -> IntentDecision:
+def analyze_intent(user_text: str, has_media: bool) -> CompanionIntentDecision:
     text = (user_text or "").strip().lower()
     if not text:
-        return IntentDecision(
+        return CompanionIntentDecision(
             intent=CompanionIntentType.SMALL_TALK,
             route=CompanionRoute.COMPANION,
             confidence=0.99,
@@ -68,7 +68,7 @@ def analyze_intent(user_text: str, has_media: bool) -> IntentDecision:
 
     for pattern in HEAVY_PATTERNS:
         if re.search(pattern, text, flags=re.IGNORECASE):
-            return IntentDecision(
+            return CompanionIntentDecision(
                 intent=CompanionIntentType.HEAVY_TASK,
                 route=CompanionRoute.HANDOFF,
                 confidence=0.9,
@@ -78,7 +78,7 @@ def analyze_intent(user_text: str, has_media: bool) -> IntentDecision:
 
     for pattern in ACTION_PATTERNS:
         if re.search(pattern, text, flags=re.IGNORECASE):
-            return IntentDecision(
+            return CompanionIntentDecision(
                 intent=CompanionIntentType.COMPANION_ACTION,
                 route=CompanionRoute.COMPANION,
                 confidence=0.9,
@@ -88,7 +88,7 @@ def analyze_intent(user_text: str, has_media: bool) -> IntentDecision:
 
     for pattern in KNOWLEDGE_PATTERNS:
         if re.search(pattern, text, flags=re.IGNORECASE):
-            return IntentDecision(
+            return CompanionIntentDecision(
                 intent=CompanionIntentType.KNOWLEDGE_QUERY,
                 route=CompanionRoute.COMPANION,
                 confidence=0.82,
@@ -97,7 +97,7 @@ def analyze_intent(user_text: str, has_media: bool) -> IntentDecision:
             )
 
     if has_media:
-        return IntentDecision(
+        return CompanionIntentDecision(
             intent=CompanionIntentType.KNOWLEDGE_QUERY,
             route=CompanionRoute.COMPANION,
             confidence=0.76,
@@ -105,7 +105,7 @@ def analyze_intent(user_text: str, has_media: bool) -> IntentDecision:
             matched_rule="has_media",
         )
 
-    return IntentDecision(
+    return CompanionIntentDecision(
         intent=CompanionIntentType.SMALL_TALK,
         route=CompanionRoute.COMPANION,
         confidence=0.72,
@@ -219,7 +219,7 @@ def classify_task(user_text: str) -> Dict[str, Any]:
         return fallback
 
 
-def intent_instruction(decision: IntentDecision) -> str:
+def intent_instruction(decision: CompanionIntentDecision) -> str:
     if decision.intent == CompanionIntentType.COMPANION_ACTION:
         return (
             "当前意图=companion_action。优先生成可执行的action_intents；"
