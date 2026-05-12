@@ -1,9 +1,15 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
 import { chatApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi } from './api'
 import CourseChatPage from './CourseChatPage'
+import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 const CompanionChatPage = lazy(() => import('./CompanionChatPage'))
+const APP_SEARCH_PARAMS = new URLSearchParams(window.location.search)
+const IS_TERMINAL_WINDOW = APP_SEARCH_PARAMS.get('terminalWindow') === '1'
+const INITIAL_TERMINAL_SESSION_ID = APP_SEARCH_PARAMS.get('sessionId') || ''
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -21,6 +27,7 @@ const IconSettings = () => (<svg viewBox="0 0 24 24" fill="none" stroke="current
 const IconCompanion = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg>)
 const IconImage = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>)
 const IconLogo = () => (<svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7v10l10 5 10-5V7z"/><path d="M12 2v20"/><path d="M2 7l10 5 10-5"/></svg>)
+const IconTerminal = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>)
 const IconMic = ({ active }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" width="15" height="15" strokeLinecap="round" strokeLinejoin="round">
     <rect x="9" y="2" width="6" height="11" rx="3"/>
@@ -294,10 +301,21 @@ export default function App() {
     try { return localStorage.getItem(LIVE2D_BG_KEY) || '' } catch { return '' }
   })
   const [isMaximized, setIsMaximized] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalSessions, setTerminalSessions] = useState([])
+  const [activeTerminalId, setActiveTerminalId] = useState('')
+  const [terminalHeight, setTerminalHeight] = useState(320)
+  const [terminalResizing, setTerminalResizing] = useState(false)
 
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const composerRef = useRef(null)
+  const terminalContainerRef = useRef(null)
+  const terminalResizeStartRef = useRef(null)
+  const xtermRef = useRef(null)
+  const fitAddonRef = useRef(null)
+  const xtermSessionIdRef = useRef('')
+  const terminalBuffersRef = useRef(new Map())
   const { toast, show: showToast } = useToast()
   const { listening, startListening, stopListening } = useSpeechInput(backendUrl, selectedAudioInput)
 
@@ -327,6 +345,10 @@ export default function App() {
   const activeProjectThread = useMemo(
     () => activeProjectThreads.find(x => x.id === activeProjectThreadId) || activeProjectThreads[0] || null,
     [activeProjectThreads, activeProjectThreadId],
+  )
+  const activeTerminal = useMemo(
+    () => terminalSessions.find(x => x.sessionId === activeTerminalId) || terminalSessions[0] || null,
+    [terminalSessions, activeTerminalId],
   )
 
   useEffect(() => {
@@ -604,6 +626,175 @@ export default function App() {
     setLastLatency(null)
   }
 
+  function upsertTerminalSession(session) {
+    if (!session?.sessionId) return
+    if (typeof session.buffer === 'string') {
+      terminalBuffersRef.current.set(session.sessionId, session.buffer)
+    }
+    setTerminalSessions(prev => {
+      const idx = prev.findIndex(x => x.sessionId === session.sessionId)
+      if (idx >= 0) {
+        const next = [...prev]
+        next[idx] = { ...next[idx], ...session }
+        return next
+      }
+      return [...prev, session]
+    })
+    setActiveTerminalId(session.sessionId)
+  }
+
+  function appendTerminalOutput(sessionId, text) {
+    const chunk = String(text || '')
+    const sid = String(sessionId || '')
+    if (!chunk || !sid) return
+    const nextBuffer = String((terminalBuffersRef.current.get(sid) || '') + chunk).slice(-200000)
+    terminalBuffersRef.current.set(sid, nextBuffer)
+    setTerminalSessions(prev => {
+      if (prev.some(session => session.sessionId === sid)) return prev
+      return [...prev, { sessionId: sid, cwd: '', title: 'PowerShell', status: 'running', buffer: nextBuffer }]
+    })
+  }
+
+  function fitActiveTerminal() {
+    const term = xtermRef.current
+    const fitAddon = fitAddonRef.current
+    const sessionId = xtermSessionIdRef.current
+    if (!term || !fitAddon || !sessionId) return
+    try {
+      fitAddon.fit()
+      window.windowApi?.resizeTerminal?.(sessionId, term.cols, term.rows)
+    } catch (e) {
+      void e
+    }
+  }
+
+  async function createProjectTerminal({ forceNew = false } = {}) {
+    const projectPath = activeCourse?.project_path || activeTerminal?.cwd
+    if (!projectPath) {
+      showToast('当前项目还没有可用目录', 'error')
+      return null
+    }
+    if (!window.windowApi?.openPowerShell) {
+      showToast('当前运行环境不支持打开终端', 'error')
+      return null
+    }
+
+    if (!forceNew) {
+      const existing = terminalSessions.find(x => x.cwd === projectPath && x.status !== 'exited')
+      if (existing) {
+        setTerminalOpen(true)
+        setActiveTerminalId(existing.sessionId)
+        return existing
+      }
+    }
+
+    try {
+      setTerminalOpen(true)
+      const res = await window.windowApi.openPowerShell(projectPath, {
+        cols: xtermRef.current?.cols || 120,
+        rows: xtermRef.current?.rows || 30,
+      })
+      if (res?.ok) {
+        const session = {
+          sessionId: res.sessionId,
+          cwd: res.cwd || projectPath,
+          title: res.title || `终端 ${terminalSessions.length + 1}`,
+          status: 'running',
+          buffer: res.buffer || '',
+          cols: res.cols,
+          rows: res.rows,
+        }
+        upsertTerminalSession(session)
+        showToast(forceNew ? '已新建项目终端' : '已打开项目终端', 'success')
+        return session
+      } else {
+        showToast('打开 PowerShell 失败', 'error')
+      }
+    } catch (e) {
+      showToast('打开 PowerShell 失败: ' + (e?.message || e), 'error')
+    }
+    return null
+  }
+
+  async function openProjectTerminal() {
+    return createProjectTerminal({ forceNew: false })
+  }
+
+  async function newProjectTerminal() {
+    return createProjectTerminal({ forceNew: true })
+  }
+
+  async function writeTerminalInput(sessionId, input) {
+    if (!sessionId || !input) return
+    if (!window.windowApi?.writeTerminal) {
+      showToast('当前运行环境不支持内置终端', 'error')
+      return
+    }
+    try {
+      await window.windowApi.writeTerminal(sessionId, input)
+    } catch (e) {
+      appendTerminalOutput(sessionId, `\n终端写入失败: ${e?.message || e}\n`)
+    }
+  }
+
+  async function closeProjectTerminal(sessionId = activeTerminalId) {
+    const sid = String(sessionId || '')
+    if (!sid) return
+    try {
+      await window.windowApi?.closeTerminal?.(sid)
+    } catch (e) {
+      void e
+    }
+    const nextSessions = terminalSessions.filter(x => x.sessionId !== sid)
+    terminalBuffersRef.current.delete(sid)
+    setTerminalSessions(nextSessions)
+    if (activeTerminalId === sid) setActiveTerminalId(nextSessions[0]?.sessionId || '')
+    if (nextSessions.length === 0) setTerminalOpen(false)
+  }
+
+  async function popoutTerminal(sessionId = activeTerminalId) {
+    const sid = String(sessionId || '')
+    if (!sid) return
+    try {
+      await window.windowApi?.popoutTerminal?.(sid)
+    } catch (e) {
+      showToast('弹出终端失败: ' + (e?.message || e), 'error')
+    }
+  }
+
+  function startTerminalResize(e) {
+    e.preventDefault()
+    terminalResizeStartRef.current = {
+      y: e.clientY,
+      height: terminalHeight,
+    }
+    setTerminalResizing(true)
+  }
+
+  function startTerminalPopoutDrag(e) {
+    if (e.target?.closest?.('button')) return
+    const sessionId = activeTerminal?.sessionId
+    if (!sessionId) return
+    const startX = e.clientX
+    const startY = e.clientY
+    let didPop = false
+    const cleanup = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', cleanup)
+    }
+    const onMove = (moveEvent) => {
+      const dx = moveEvent.clientX - startX
+      const dy = moveEvent.clientY - startY
+      if (!didPop && Math.sqrt(dx * dx + dy * dy) > 90) {
+        didPop = true
+        popoutTerminal(sessionId)
+        cleanup()
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', cleanup)
+  }
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading, activeThreadId])
   useEffect(() => {
     const ta = textareaRef.current; if (!ta) return
@@ -618,6 +809,167 @@ export default function App() {
     const unsub = window.windowApi.onStateChanged((isMax) => setIsMaximized(isMax))
     return () => { if (typeof unsub === 'function') unsub() }
   }, [])
+
+  useEffect(() => {
+    if (!window.windowApi?.onTerminalEvent) return
+    const unsub = window.windowApi.onTerminalEvent((event) => {
+      if (!event || !event.type) return
+      if (event.type === 'started') {
+        setTerminalOpen(true)
+        upsertTerminalSession({
+          sessionId: event.sessionId,
+          cwd: event.cwd || '',
+          title: event.title || (event.cwd ? String(event.cwd).split(/[\\/]/).filter(Boolean).pop() : 'PowerShell'),
+          status: 'running',
+          buffer: '',
+          cols: event.cols,
+          rows: event.rows,
+        })
+      } else if (event.type === 'output' || event.type === 'error') {
+        if (event.sessionId === xtermSessionIdRef.current && xtermRef.current) {
+          xtermRef.current.write(event.data || '')
+        }
+        appendTerminalOutput(event.sessionId, event.data || '')
+      } else if (event.type === 'exit') {
+        setTerminalSessions(prev => prev.map(session => (
+          session.sessionId === event.sessionId ? { ...session, status: 'exited' } : session
+        )))
+        const exitText = `\r\n[terminal] 已退出 code=${event.code ?? ''} signal=${event.signal ?? ''}\r\n`
+        if (event.sessionId === xtermSessionIdRef.current && xtermRef.current) {
+          xtermRef.current.write(exitText)
+        }
+        appendTerminalOutput(event.sessionId, exitText)
+      } else if (event.type === 'closed') {
+        terminalBuffersRef.current.delete(event.sessionId)
+        setTerminalSessions(prev => {
+          const next = prev.filter(session => session.sessionId !== event.sessionId)
+          if (next.length === 0) setTerminalOpen(false)
+          setActiveTerminalId(current => current === event.sessionId ? (next[0]?.sessionId || '') : current)
+          return next
+        })
+      }
+    })
+    return () => { if (typeof unsub === 'function') unsub() }
+  }, [])
+
+  useEffect(() => {
+    if (!window.windowApi?.listTerminals) return
+    window.windowApi.listTerminals().then(res => {
+      const sessions = Array.isArray(res?.sessions) ? res.sessions : []
+      if (sessions.length > 0) {
+        sessions.forEach(session => {
+          if (session?.sessionId) terminalBuffersRef.current.set(session.sessionId, session.buffer || '')
+        })
+        setTerminalSessions(sessions)
+        setActiveTerminalId(prev => prev || INITIAL_TERMINAL_SESSION_ID || sessions[0].sessionId)
+        if (IS_TERMINAL_WINDOW) setTerminalOpen(true)
+      }
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const container = terminalContainerRef.current
+    if (!terminalOpen || !container || !activeTerminal?.sessionId) return
+
+    const term = new XTerm({
+      cursorBlink: true,
+      convertEol: false,
+      fontFamily: '"Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
+      fontSize: 13,
+      lineHeight: 1.2,
+      scrollback: 10000,
+      theme: {
+        background: '#101418',
+        foreground: '#d6e2ee',
+        cursor: '#d6e2ee',
+        selectionBackground: '#31576f',
+        black: '#1f2428',
+        red: '#f97583',
+        green: '#85e89d',
+        yellow: '#ffea7f',
+        blue: '#79b8ff',
+        magenta: '#b392f0',
+        cyan: '#56d4dd',
+        white: '#d1d5da',
+        brightBlack: '#586069',
+        brightRed: '#f97583',
+        brightGreen: '#85e89d',
+        brightYellow: '#ffea7f',
+        brightBlue: '#79b8ff',
+        brightMagenta: '#b392f0',
+        brightCyan: '#56d4dd',
+        brightWhite: '#f6f8fa',
+      },
+    })
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    container.replaceChildren()
+    term.open(container)
+    xtermRef.current = term
+    fitAddonRef.current = fitAddon
+    xtermSessionIdRef.current = activeTerminal.sessionId
+    const initialBuffer = terminalBuffersRef.current.get(activeTerminal.sessionId) ?? activeTerminal.buffer
+    if (initialBuffer) term.write(initialBuffer)
+    const dataDisposable = term.onData(data => writeTerminalInput(activeTerminal.sessionId, data))
+    const resizeDisposable = term.onResize(size => {
+      window.windowApi?.resizeTerminal?.(activeTerminal.sessionId, size.cols, size.rows)
+    })
+
+    requestAnimationFrame(() => {
+      fitActiveTerminal()
+      term.focus()
+    })
+
+    return () => {
+      dataDisposable.dispose()
+      resizeDisposable.dispose()
+      term.dispose()
+      if (xtermSessionIdRef.current === activeTerminal.sessionId) {
+        xtermRef.current = null
+        fitAddonRef.current = null
+        xtermSessionIdRef.current = ''
+      }
+    }
+  }, [terminalOpen, activeTerminalId, activeTerminal?.sessionId])
+
+  useEffect(() => {
+    if (!terminalOpen) return
+    requestAnimationFrame(() => fitActiveTerminal())
+  }, [terminalOpen, terminalHeight, activeTerminalId])
+
+  useEffect(() => {
+    const container = terminalContainerRef.current
+    if (!container || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => fitActiveTerminal())
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [terminalOpen, activeTerminalId])
+
+  useEffect(() => {
+    if (!terminalResizing) return
+    const onMove = (e) => {
+      const start = terminalResizeStartRef.current
+      if (!start) return
+      const nextHeight = Math.max(180, Math.min(window.innerHeight - 180, start.height + (start.y - e.clientY)))
+      setTerminalHeight(nextHeight)
+    }
+    const onUp = () => {
+      setTerminalResizing(false)
+      terminalResizeStartRef.current = null
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'ns-resize'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+  }, [terminalResizing])
 
   // 枚举音频设备（先请求麦克风权限，再枚举才有 label）
   useEffect(() => {
@@ -840,6 +1192,45 @@ export default function App() {
     </aside>
   )
 
+  if (IS_TERMINAL_WINDOW) {
+    return (
+      <div className="terminal-window-only">
+        <div className="terminal-panel terminal-popout-panel" style={{ height: '100vh' }}>
+          <div className="terminal-panel-head terminal-window-head">
+            <div className="terminal-title">
+              <IconTerminal />
+              <span>PowerShell</span>
+              <code title={activeTerminal?.cwd || ''}>{activeTerminal?.cwd || '终端窗口'}</code>
+            </div>
+            <div className="terminal-actions">
+              <button type="button" className="ghost-btn small" onClick={newProjectTerminal}>+</button>
+              <button type="button" className="ghost-btn small" onClick={() => closeProjectTerminal(activeTerminal?.sessionId)}>结束</button>
+            </div>
+          </div>
+          <div className="terminal-tabs">
+            {terminalSessions.map((session, idx) => (
+              <button
+                key={session.sessionId}
+                type="button"
+                className={`terminal-tab${session.sessionId === activeTerminal?.sessionId ? ' active' : ''}`}
+                onClick={() => setActiveTerminalId(session.sessionId)}
+                title={session.cwd}
+              >
+                <span>{session.title || `终端 ${idx + 1}`}</span>
+                {session.status === 'exited' && <em>已退出</em>}
+              </button>
+            ))}
+          </div>
+          <div
+            className="terminal-screen"
+            ref={terminalContainerRef}
+            title="这是完整 PTY 终端，直接输入即可"
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
@@ -853,6 +1244,16 @@ export default function App() {
           {page==='chat' && useWebSearch && <span className="topbar-tag">联网</span>}
           {page==='course_chat' && activeProjectThread && <span className="topbar-tag">{activeProjectThread.title || THREAD_DEFAULT_TITLE}</span>}
           <div className="topbar-spacer"/>
+          {page==='course_chat' && activeCourse && (
+            <button
+              title={activeCourse.project_path ? `打开项目终端：${activeCourse.project_path}` : '打开项目终端'}
+              onClick={openProjectTerminal}
+              className={`ghost-btn small topbar-terminal-btn${terminalOpen ? ' active' : ''}`}
+            >
+              <IconTerminal />
+              <span>CLI</span>
+            </button>
+          )}
           {(page==='chat' || page==='companion') && (
             <span className={`topbar-status ${loading?'loading':''}`}>
               {loading ? '生成中…' : lastLatency ? `${lastLatency}ms` : '就绪'}
@@ -932,6 +1333,55 @@ export default function App() {
               showToast={showToast}
               onBack={() => setPage('chat')}
               onThreadTitleChange={updateProjectThreadTitle}
+            />
+          </div>
+        )}
+
+        {page==='course_chat' && activeCourse && terminalOpen && (
+          <div className={`terminal-panel${terminalResizing ? ' is-resizing' : ''}`} style={{ height: terminalHeight }}>
+            <div
+              className="terminal-resize-handle"
+              title="上下拖动调整终端高度"
+              onMouseDown={startTerminalResize}
+            />
+            <div
+              className="terminal-panel-head"
+              onMouseDown={startTerminalPopoutDrag}
+              title="拖动标题栏可弹出为独立终端窗口"
+            >
+              <div className="terminal-title">
+                <IconTerminal />
+                <span>PowerShell</span>
+                <code title={activeTerminal?.cwd || activeCourse.project_path || ''}>
+                  {activeTerminal?.cwd || activeCourse.project_path || '项目目录'}
+                </code>
+              </div>
+              <div className="terminal-actions">
+                <button type="button" className="ghost-btn small" onClick={newProjectTerminal}>+</button>
+                <button type="button" className="ghost-btn small" onClick={() => popoutTerminal(activeTerminal?.sessionId)}>弹出</button>
+                <button type="button" className="ghost-btn small" onClick={() => setTerminalOpen(false)}>收起</button>
+                <button type="button" className="ghost-btn small" onClick={() => closeProjectTerminal(activeTerminal?.sessionId)}>结束</button>
+              </div>
+            </div>
+            <div className="terminal-tabs">
+              {terminalSessions.map((session, idx) => (
+                <button
+                  key={session.sessionId}
+                  type="button"
+                  className={`terminal-tab${session.sessionId === activeTerminal?.sessionId ? ' active' : ''}`}
+                  onClick={() => setActiveTerminalId(session.sessionId)}
+                  title={session.cwd}
+                >
+                  <span>{session.title || `终端 ${idx + 1}`}</span>
+                  {session.status === 'exited' && <em>已退出</em>}
+                </button>
+              ))}
+            </div>
+            <div
+              className="terminal-screen"
+              ref={terminalContainerRef}
+              onDoubleClick={() => popoutTerminal(activeTerminal?.sessionId)}
+              title="这是完整 PTY 终端，直接输入即可；双击弹出窗口"
             />
           </div>
         )}

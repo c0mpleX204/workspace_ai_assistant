@@ -16,6 +16,8 @@ COMPANION_FACT_PREFIX = "companion_fact:"
 COMPANION_LOCK_PREFIX = "companion_persona_lock:"
 MAX_PREF_CONTEXT = 8
 MAX_FACT_CONTEXT = 6
+PHRASE_STOP_CHARS = r"\s，。！？、；：,.!?;:"
+TRIM_CHARS = " \t\r\n，。！？、；：,.!?;:"
 
 
 def _clean(text: str) -> str:
@@ -38,8 +40,8 @@ def extract_mem_signals(user_text: str, session_id: str) -> List[Dict[str, Any]]
 
     signals: List[Dict[str, Any]] = []
 
-    # 鍋忓ソ锛氱О鍛?
-    m = re.search(r"鍙垜\s*([^\s锛屻€傦紒锛?!?]{1,20})", text, flags=re.IGNORECASE)
+    # 偏好：称呼
+    m = re.search(rf"叫我\s*([^{PHRASE_STOP_CHARS}]{{1,20}})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
@@ -50,48 +52,48 @@ def extract_mem_signals(user_text: str, session_id: str) -> List[Dict[str, Any]]
             }
         )
 
-    # 鍋忓ソ锛氳姘?
-    m = re.search(r"(鐢▅淇濇寔)\s*([^\s锛屻€傦紒锛?!?]{1,20})\s*(璇皵|椋庢牸)", text, flags=re.IGNORECASE)
+    # 偏好：语气
+    m = re.search(rf"(?:用|保持)\s*([^{PHRASE_STOP_CHARS}]{{1,20}})\s*(?:语气|风格)", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _pref_key("tone"),
-                "value": m.group(2).strip(),
+                "value": m.group(1).strip(),
                 "source": "companion_rule:tone",
                 "confidence": 0.9,
             }
         )
 
-    # 鍋忓ソ锛氬枩娆?/ 涓嶅枩娆?
-    m = re.search(r"鎴戝枩娆?.{1,40})", text, flags=re.IGNORECASE)
+    # 偏好：喜欢 / 不喜欢
+    m = re.search(r"我喜欢(.{1,40})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _pref_key("likes"),
-                "value": m.group(1).strip(" 锛屻€??锛侊紵"),
+                "value": m.group(1).strip(TRIM_CHARS),
                 "source": "companion_rule:likes",
                 "confidence": 0.82,
             }
         )
 
-    m = re.search(r"鎴戜笉鍠滄(.{1,40})", text, flags=re.IGNORECASE)
+    m = re.search(r"我不喜欢(.{1,40})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _pref_key("dislikes"),
-                "value": m.group(1).strip(" 锛屻€??锛侊紵"),
+                "value": m.group(1).strip(TRIM_CHARS),
                 "source": "companion_rule:dislikes",
                 "confidence": 0.88,
             }
         )
 
-    # 浼氳瘽浜嬪疄锛氭渶杩戝湪鍋氫粈涔?
-    m = re.search(r"(鎴戞渶杩戝湪|鎴戠幇鍦ㄥ湪)(.{1,60})", text, flags=re.IGNORECASE)
+    # 会话事实：最近在做什么
+    m = re.search(r"(?:我最近在|我现在在)(.{1,60})", text, flags=re.IGNORECASE)
     if m:
         signals.append(
             {
                 "key": _fact_key(session_id, "recent_focus"),
-                "value": m.group(2).strip(" 锛屻€??锛侊紵"),
+                "value": m.group(1).strip(TRIM_CHARS),
                 "source": "companion_rule:recent_focus",
                 "confidence": 0.78,
             }
