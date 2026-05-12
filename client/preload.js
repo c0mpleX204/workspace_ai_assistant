@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('windowApi', {
   resizeTerminal: (sessionId, cols, rows) => ipcRenderer.invoke('terminal-resize', { sessionId, cols, rows }),
   closeTerminal: (sessionId) => ipcRenderer.invoke('terminal-close', sessionId),
   popoutTerminal: (sessionId) => ipcRenderer.invoke('terminal-popout', sessionId),
+  openLive2DWindow: (backgroundImageUrl) => ipcRenderer.invoke('live2d-open-window', backgroundImageUrl),
   onStateChanged: (callback) => {
     const handler = (_event, isMaximized) => callback(Boolean(isMaximized));
     ipcRenderer.on('window-state-changed', handler);
@@ -25,5 +26,10 @@ contextBridge.exposeInMainWorld('windowApi', {
     const handler = (_event, payload) => callback(payload || {});
     ipcRenderer.on('terminal-event', handler);
     return () => ipcRenderer.removeListener('terminal-event', handler);
+  },
+  onLive2DWindowEvent: (callback) => {
+    const handler = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('live2d-window-event', handler);
+    return () => ipcRenderer.removeListener('live2d-window-event', handler);
   },
 });

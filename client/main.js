@@ -67,6 +67,7 @@ function createWindow() {
   ipcMain.handle('window-close', () => win.close());
   ipcMain.handle('window-is-maximized', () => win.isMaximized());
 
+  let live2dWindow = null;
   const terminalSessions = new Map();
   const sendTerminalEvent = (payload) => {
     for (const target of BrowserWindow.getAllWindows()) {
@@ -132,6 +133,51 @@ function createWindow() {
       childWin.loadURL(`${devUrl}?${query}`);
     } else {
       childWin.loadFile(path.join(__dirname, 'dist', 'index.html'), { query: { terminalWindow: '1', sessionId } });
+    }
+  };
+
+  const createLive2DWindow = (backgroundImageUrl = '') => {
+    const bg = String(backgroundImageUrl || '');
+    if (live2dWindow && !live2dWindow.isDestroyed()) {
+      live2dWindow.webContents.send('live2d-window-event', { type: 'background', backgroundImageUrl: bg });
+      live2dWindow.show();
+      live2dWindow.focus();
+      return;
+    }
+
+    live2dWindow = new BrowserWindow({
+      width: 430,
+      height: 720,
+      minWidth: 280,
+      minHeight: 420,
+      backgroundColor: '#f5f7fa',
+      titleBarStyle: 'hidden',
+      titleBarOverlay: {
+        color: '#f5f7fa',
+        symbolColor: '#435669',
+        height: 34,
+      },
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+      },
+    });
+
+    live2dWindow.on('closed', () => {
+      live2dWindow = null;
+    });
+
+    const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+    const query = new URLSearchParams({ live2dWindow: '1', bg }).toString();
+    if (
+      process.env.NODE_ENV === 'development' ||
+      process.env.VITE_DEV_SERVER_URL ||
+      process.env.npm_lifecycle_event === 'dev'
+    ) {
+      live2dWindow.loadURL(`${devUrl}?${query}`);
+    } else {
+      live2dWindow.loadFile(path.join(__dirname, 'dist', 'index.html'), { query: { live2dWindow: '1', bg } });
     }
   };
 
@@ -218,6 +264,10 @@ function createWindow() {
       throw new Error('终端未启动');
     }
     createTerminalWindow(sid);
+    return { ok: true };
+  });
+  ipcMain.handle('live2d-open-window', (_event, backgroundImageUrl) => {
+    createLive2DWindow(backgroundImageUrl);
     return { ok: true };
   });
 

@@ -7,9 +7,12 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 const CompanionChatPage = lazy(() => import('./CompanionChatPage'))
+const Live2DViewer = lazy(() => import('./Live2DViewer'))
 const APP_SEARCH_PARAMS = new URLSearchParams(window.location.search)
 const IS_TERMINAL_WINDOW = APP_SEARCH_PARAMS.get('terminalWindow') === '1'
+const IS_LIVE2D_WINDOW = APP_SEARCH_PARAMS.get('live2dWindow') === '1'
 const INITIAL_TERMINAL_SESSION_ID = APP_SEARCH_PARAMS.get('sessionId') || ''
+const INITIAL_LIVE2D_BG_URL = APP_SEARCH_PARAMS.get('bg') || ''
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -300,6 +303,7 @@ export default function App() {
   const [live2dBgUrl, setLive2dBgUrl] = useState(() => {
     try { return localStorage.getItem(LIVE2D_BG_KEY) || '' } catch { return '' }
   })
+  const [live2dWindowBgUrl, setLive2dWindowBgUrl] = useState(INITIAL_LIVE2D_BG_URL)
   const [isMaximized, setIsMaximized] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalSessions, setTerminalSessions] = useState([])
@@ -762,6 +766,19 @@ export default function App() {
     }
   }
 
+  async function openLive2DWindow() {
+    if (!window.windowApi?.openLive2DWindow) {
+      showToast('当前运行环境不支持弹出 Live2D', 'error')
+      return
+    }
+    try {
+      await window.windowApi.openLive2DWindow(live2dBgUrl)
+      showToast('Live2D 已弹出', 'success')
+    } catch (e) {
+      showToast('弹出 Live2D 失败: ' + (e?.message || e), 'error')
+    }
+  }
+
   function startTerminalResize(e) {
     e.preventDefault()
     terminalResizeStartRef.current = {
@@ -847,6 +864,16 @@ export default function App() {
           setActiveTerminalId(current => current === event.sessionId ? (next[0]?.sessionId || '') : current)
           return next
         })
+      }
+    })
+    return () => { if (typeof unsub === 'function') unsub() }
+  }, [])
+
+  useEffect(() => {
+    if (!IS_LIVE2D_WINDOW || !window.windowApi?.onLive2DWindowEvent) return
+    const unsub = window.windowApi.onLive2DWindowEvent((event) => {
+      if (event?.type === 'background') {
+        setLive2dWindowBgUrl(String(event.backgroundImageUrl || ''))
       }
     })
     return () => { if (typeof unsub === 'function') unsub() }
@@ -1231,6 +1258,21 @@ export default function App() {
     )
   }
 
+  if (IS_LIVE2D_WINDOW) {
+    return (
+      <div className="live2d-window-only">
+        <div className="live2d-window-head">
+          <span>Live2D</span>
+        </div>
+        <div className="live2d-window-body">
+          <Suspense fallback={null}>
+            <Live2DViewer backgroundImageUrl={live2dWindowBgUrl} />
+          </Suspense>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
@@ -1396,7 +1438,7 @@ export default function App() {
               sessionId={sessionId}
               selectedAudioInput={selectedAudioInput}
               selectedAudioOutput={selectedAudioOutput}
-              live2dBgUrl={live2dBgUrl}
+              onOpenLive2D={openLive2DWindow}
               showToast={showToast}
             />
           </Suspense>

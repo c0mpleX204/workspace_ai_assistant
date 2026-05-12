@@ -1,7 +1,5 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { chatApi, companionChatApi, companionTaskPollApi } from './api'
-
-const Live2DViewer = lazy(() => import('./Live2DViewer'))
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -43,7 +41,7 @@ function Message({ m }) {
   )
 }
 
-export default function CompanionChatPage({ backendUrl, userId, sessionId, selectedAudioInput, selectedAudioOutput, live2dBgUrl, showToast }) {
+export default function CompanionChatPage({ backendUrl, userId, sessionId, selectedAudioInput, selectedAudioOutput, onOpenLive2D, showToast }) {
   const preferLocalTts = false
   const STT_SLICE_MS = 500
   const MIC_OPEN = 30
@@ -1141,6 +1139,14 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
               <div className="companion-subtitle">实时语音识别 + 流式语音播报</div>
             </div>
             <div className="companion-head-controls">
+              <button
+                type="button"
+                className="ghost-btn small companion-live2d-btn"
+                onClick={() => onOpenLive2D?.()}
+                title="弹出独立 Live2D 窗口"
+              >
+                Live2D
+              </button>
               <select
                 className="field-input field-select companion-route-select"
                 value={routeMode}
@@ -1287,27 +1293,17 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         </div>
       </div>
 
-      <div className="companion-right-stack">
-        <div className="companion-right companion-top">
-          <div className="companion-card monitor-card">
-            <div className="monitor-title">后台检测日志</div>
-            <div className="monitor-list">
-              {logs.length === 0 && <div className="monitor-empty">暂无日志</div>}
-              {logs.map((x, i) => (
-                <div key={i} className={`monitor-item ${x.type}`}>
-                  <span className="monitor-time">[{x.ts}]</span>
-                  <span className="monitor-text">{x.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="companion-right companion-bottom">
-          <div className="companion-card" style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            <Suspense fallback={null}>
-              <Live2DViewer backgroundImageUrl={live2dBgUrl} />
-            </Suspense>
+      <div className="companion-right companion-monitor-pane">
+        <div className="companion-card monitor-card">
+          <div className="monitor-title">后台检测日志</div>
+          <div className="monitor-list">
+            {logs.length === 0 && <div className="monitor-empty">暂无日志</div>}
+            {logs.map((x, i) => (
+              <div key={i} className={`monitor-item ${x.type}`}>
+                <span className="monitor-time">[{x.ts}]</span>
+                <span className="monitor-text">{x.text}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
