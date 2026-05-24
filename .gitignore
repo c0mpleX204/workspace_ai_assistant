@@ -13,15 +13,32 @@ __pycache__/
 # Node
 node_modules/
 desktop-app/node_modules/
+client/.vite/
+client/dist/
+client/coverage/
+coverage/
 
 # Runtime and generated files
 logs/
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+.env
+.env.*
+!.env.example
+!.env.*.example
 upload/
 data/upload/
 data/runtime/
 data/conversations/
+data/agent_runs/
+data/projects/
+data/companion_sessions/
 desktop-app/logs/
 desktop-app/data/upload/
+htmlcov/
 
 # OS files
 .DS_Store
