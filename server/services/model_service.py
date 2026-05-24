@@ -8,6 +8,59 @@ from server.config.config import settings
 from server.utils.text_utils import repair_mojibake_text
 
 
+def normalize_token_usage(raw_usage: object) -> Dict[str, int | None]:
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    completion_details = (
+        usage.get("completion_tokens_details")
+        if isinstance(usage.get("completion_tokens_details"), dict)
+        else {}
+    )
+
+    input_tokens = usage.get("prompt_tokens")
+    output_tokens = usage.get("completion_tokens")
+    total_tokens = usage.get("total_tokens")
+    cache_hit_tokens = (
+        usage.get("prompt_cache_hit_tokens")
+        if usage.get("prompt_cache_hit_tokens") is not None
+        else prompt_details.get("cached_tokens")
+    )
+    cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
+    reasoning_tokens = completion_details.get("reasoning_tokens")
+
+    def as_int(value: object) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "input_tokens": as_int(input_tokens),
+        "output_tokens": as_int(output_tokens),
+        "total_tokens": as_int(total_tokens),
+        "cache_hit_tokens": as_int(cache_hit_tokens),
+        "cache_miss_tokens": as_int(cache_miss_tokens),
+        "reasoning_tokens": as_int(reasoning_tokens),
+    }
+
+
+def _response_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        parts: List[str] = []
+        for part in value:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if text is None:
+                text = part.get("content")
+            if text is not None:
+                parts.append(str(text))
+        return repair_mojibake_text("".join(parts))
+    return repair_mojibake_text(str(value))
+
+
 def _build_remote_providers() -> List[Dict[str, str]]:
     providers: List[Dict[str, str]] = []
     if settings.remote_primary_api_key:
@@ -97,14 +150,14 @@ def _remote_provider_reply(
     if not choices:
         raise RuntimeError(f"remote api invalid response: {data}")
     message = choices[0].get("message") or {}
-    content = message.get("content", "")
-    if isinstance(content, list):
-        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-    content = repair_mojibake_text(str(content))
+    content = _response_text(message.get("content", ""))
     latency_ms = int((time.time() - start) * 1000)
     return {
         "reply": str(content).strip(),
         "latency_ms": latency_ms,
+        "usage": normalize_token_usage(data.get("usage")),
+        "model": req_model,
+        "provider": provider.get("name", "primary"),
     }
 
 
@@ -210,9 +263,18 @@ def _remote_vision_reply(
     )
 
 
-def remote_stream_reply(messages: List[Dict[str, str]]) -> Iterator[str]:
+def remote_stream_events(
+    messages: List[Dict[str, str]],
+    model_override: str | None = None,
+    generation: Dict[str, object] | None = None,
+) -> Iterator[Dict[str, object]]:
+    generation = generation or {}
     providers = _build_remote_providers()
     provider = providers[0]
+    req_model = str(model_override or provider["model"])
+    req_temperature = float(generation.get("temperature", settings.temperature))
+    req_top_p = float(generation.get("top_p", settings.top_p))
+    req_max_tokens = int(generation.get("max_tokens", settings.max_new_tokens))
     base_url = provider["api_base_url"].rstrip("/")
     url = f"{base_url}/chat/completions"
     headers = {
@@ -220,12 +282,13 @@ def remote_stream_reply(messages: List[Dict[str, str]]) -> Iterator[str]:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": provider["model"],
+        "model": req_model,
         "messages": messages,
-        "temperature": settings.temperature,
-        "top_p": settings.top_p,
-        "max_tokens": settings.max_new_tokens,
+        "temperature": req_temperature,
+        "top_p": req_top_p,
+        "max_tokens": req_max_tokens,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
 
     try:
@@ -244,14 +307,11 @@ def remote_stream_reply(messages: List[Dict[str, str]]) -> Iterator[str]:
                 choices = obj.get("choices") or []
                 if choices:
                     msg = choices[0].get("message") or {}
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        content = "".join(
-                            part.get("text", "") for part in content if isinstance(part, dict)
-                        )
-                    content = repair_mojibake_text(str(content))
+                    content = _response_text(msg.get("content", ""))
                     if content:
-                        yield content
+                        yield {"type": "delta", "delta": content}
+                if obj.get("usage"):
+                    yield {"type": "usage", "usage": normalize_token_usage(obj.get("usage"))}
                 return
 
             for raw_line in resp.iter_lines(decode_unicode=True):
@@ -268,19 +328,23 @@ def remote_stream_reply(messages: List[Dict[str, str]]) -> Iterator[str]:
                 except Exception:
                     continue
 
+                if obj.get("usage"):
+                    yield {"type": "usage", "usage": normalize_token_usage(obj.get("usage"))}
+
                 choices = obj.get("choices") or []
                 if not choices:
                     continue
-                delta = (choices[0].get("delta") or {}).get("content", "")
-                if isinstance(delta, list):
-                    delta = "".join(
-                        part.get("text", "") for part in delta if isinstance(part, dict)
-                    )
-                delta = repair_mojibake_text(str(delta))
+                delta = _response_text((choices[0].get("delta") or {}).get("content", ""))
                 if delta:
-                    yield delta
+                    yield {"type": "delta", "delta": delta}
     except Exception as exc:
         raise RuntimeError(f"remote stream request failed: {exc}") from exc
+
+
+def remote_stream_reply(messages: List[Dict[str, str]]) -> Iterator[str]:
+    for event in remote_stream_events(messages):
+        if event.get("type") == "delta":
+            yield str(event.get("delta", ""))
 
 
 def smart_model_dispatch(input_data: dict) -> dict:

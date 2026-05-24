@@ -1,45 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { chatApi, companionChatApi, companionTaskPollApi } from './api'
+import CompanionView from './companion/View'
+import { fileToDataUrl } from './shared/text'
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = e => resolve(e.target.result)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function Message({ m }) {
-  return (
-    <div className={`msg-row ${m.role}`}>
-      <div className="msg-meta">{m.role === 'user' ? '你' : 'AI'}</div>
-      <div className="msg-bubble">
-        {m.images?.length > 0 && (
-          <div className="msg-images">
-            {m.images.map((src, i) => (
-              <img key={i} className="msg-img" src={src} alt="" />
-            ))}
-          </div>
-        )}
-        {m.content && <span>{m.content}</span>}
-        {m.delegatedResult && (
-          <div className="delegated-result-box">
-            {m.delegatedResult.summary && (
-              <div className="delegated-result-summary">{m.delegatedResult.summary}</div>
-            )}
-            {m.delegatedResult.raw && (
-              <details className="delegated-result-raw">
-                <summary>查看主模型原始输出</summary>
-                <pre>{m.delegatedResult.raw}</pre>
-              </details>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 export default function CompanionChatPage({ backendUrl, userId, sessionId, selectedAudioInput, selectedAudioOutput, onOpenLive2D, showToast }) {
   const preferLocalTts = false
@@ -700,6 +663,7 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
       {
         role: 'assistant',
         content: notifyText,
+        created_at: new Date().toISOString(),
         delegatedResult: {
           summary,
           raw,
@@ -758,7 +722,11 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
     const content = (text || '').trim()
     if (!content && images.length === 0) return
 
-    setMessages(m => [...m, { role: 'user', content, images }, { role: 'assistant', content: '', streaming: true }])
+    setMessages(m => [
+      ...m,
+      { role: 'user', content, images, created_at: new Date().toISOString() },
+      { role: 'assistant', content: '', streaming: true, created_at: new Date().toISOString() },
+    ])
     setLoading(true)
     resetRealtimeStt('chat_replying')
     pushLog('input', content || '[图片消息]')
@@ -788,11 +756,11 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
           const list = [...prev]
           for (let i = list.length - 1; i >= 0; i -= 1) {
             if (list[i].role === 'assistant' && list[i].streaming) {
-              list[i] = { ...list[i], content: nextText, streaming: !done }
+              list[i] = { ...list[i], content: nextText, streaming: !done, completed_at: done ? new Date().toISOString() : list[i].completed_at }
               return list
             }
           }
-          return [...list, { role: 'assistant', content: nextText, streaming: !done }]
+          return [...list, { role: 'assistant', content: nextText, streaming: !done, created_at: new Date().toISOString() }]
         })
       }
 
@@ -828,11 +796,11 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
         const list = [...prev]
         for (let i = list.length - 1; i >= 0; i -= 1) {
           if (list[i].role === 'assistant' && list[i].streaming) {
-            list[i] = { ...list[i], content: err, streaming: false }
+            list[i] = { ...list[i], content: err, streaming: false, completed_at: new Date().toISOString() }
             return list
           }
         }
-        return [...list, { role: 'assistant', content: err }]
+        return [...list, { role: 'assistant', content: err, created_at: new Date().toISOString() }]
       })
       pushLog('error', err)
     } finally {
@@ -1130,183 +1098,30 @@ export default function CompanionChatPage({ backendUrl, userId, sessionId, selec
   }, [])
 
   return (
-    <div className="companion-layout">
-      <div className="companion-left">
-        <div className="companion-card companion-chat-card">
-          <div className="companion-card-head">
-            <div>
-              <div className="companion-title">持续对话</div>
-              <div className="companion-subtitle">实时语音识别 + 流式语音播报</div>
-            </div>
-            <div className="companion-head-controls">
-              <button
-                type="button"
-                className="ghost-btn small companion-live2d-btn"
-                onClick={() => onOpenLive2D?.()}
-                title="弹出独立 Live2D 窗口"
-              >
-                Live2D
-              </button>
-              <select
-                className="field-input field-select companion-route-select"
-                value={routeMode}
-                onChange={e => setRouteMode(e.target.value)}
-                title="任务路由模式"
-              >
-                <option value="auto">自动分流</option>
-                <option value="chat_only">仅聊天</option>
-                <option value="task_auto">任务自动(Hard)</option>
-                <option value="task_force_hard">强制Hard任务</option>
-              </select>
-            <label className="mic-switch">
-              <input
-                type="checkbox"
-                checked={micEnabled}
-                onChange={e => setMicEnabled(e.target.checked)}
-              />
-              <span>{micEnabled ? 'Mic ON' : 'Mic OFF'}</span>
-            </label>
-            </div>
-          </div>
-
-          <div className="chat-area companion-chat-area" ref={chatAreaRef}>
-            {messages.length === 0 && (
-              <div className="chat-empty">
-                <div className="chat-empty-icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22" strokeWidth="1.5"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="9" y1="22" x2="15" y2="22"/></svg>
-                </div>
-                <p>打开麦克风即可持续语音对话</p>
-                <span style={{fontSize:'12px',color:'var(--text-muted)'}}>按 Y 键快速开关麦克风</span>
-              </div>
-            )}
-
-            {visibleMessages.map((m, i) => (
-              <Message key={i} m={m} />
-            ))}
-
-            {loading && !messages.some(m => m.streaming) && (
-              <div className="msg-row assistant">
-                <div className="msg-meta">AI</div>
-                <div className="typing-indicator">
-                  <div className="typing-dot" />
-                  <div className="typing-dot" />
-                  <div className="typing-dot" />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div
-            className={`composer-wrap${isDragging ? ' drag-over' : ''}`}
-            ref={composerRef}
-            onDragOver={e => {
-              e.preventDefault()
-              setIsDragging(true)
-            }}
-            onDragLeave={e => {
-              if (!composerRef.current?.contains(e.relatedTarget)) {
-                setIsDragging(false)
-              }
-            }}
-            onDrop={async e => {
-              e.preventDefault()
-              setIsDragging(false)
-              for (const f of Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))) {
-                await addImageFile(f)
-              }
-            }}
-          >
-            {isDragging && (
-              <div className="drop-overlay">
-                <div className="drop-overlay-inner">
-                  <span>松开放入图片</span>
-                </div>
-              </div>
-            )}
-
-            <div className="composer-box">
-              {pendingImages.length > 0 && (
-                <div className="composer-images">
-                  {pendingImages.map((src, i) => (
-                    <div key={i} className="composer-img-thumb">
-                      <img src={src} alt="" />
-                      <button
-                        className="composer-img-remove"
-                        onClick={() => setPendingImages(p => p.filter((_, j) => j !== i))}
-                      >
-                        x
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <textarea
-                ref={textareaRef}
-                className="composer-textarea"
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    handleSend()
-                  }
-                }}
-                placeholder="输入文字或直接说话..."
-                disabled={loading}
-                rows={1}
-              />
-
-              <div className="composer-toolbar">
-                <label className="composer-icon-btn" title="附加图片">
-                  📷
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={async e => {
-                      if (e.target.files[0]) {
-                        await addImageFile(e.target.files[0])
-                        e.target.value = ''
-                      }
-                    }}
-                  />
-                </label>
-
-                <div className="companion-meter-wrap">
-                  <span className="companion-meter-label">{speechStatus}</span>
-                  <div className="companion-meter">
-                    <div
-                      className="companion-meter-fill"
-                      style={{ width: `${micLevel}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="composer-spacer" />
-                <button className="send-btn" onClick={handleSend} disabled={!canSend} title="发送">
-                  ➤
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="companion-right companion-monitor-pane">
-        <div className="companion-card monitor-card">
-          <div className="monitor-title">后台检测日志</div>
-          <div className="monitor-list">
-            {logs.length === 0 && <div className="monitor-empty">暂无日志</div>}
-            {logs.map((x, i) => (
-              <div key={i} className={`monitor-item ${x.type}`}>
-                <span className="monitor-time">[{x.ts}]</span>
-                <span className="monitor-text">{x.text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
+    <CompanionView
+      onOpenLive2D={onOpenLive2D}
+      routeMode={routeMode}
+      setRouteMode={setRouteMode}
+      micEnabled={micEnabled}
+      setMicEnabled={setMicEnabled}
+      chatAreaRef={chatAreaRef}
+      messages={messages}
+      visibleMessages={visibleMessages}
+      loading={loading}
+      composerRef={composerRef}
+      isDragging={isDragging}
+      setIsDragging={setIsDragging}
+      addImageFile={addImageFile}
+      pendingImages={pendingImages}
+      setPendingImages={setPendingImages}
+      textareaRef={textareaRef}
+      input={input}
+      setInput={setInput}
+      handleSend={handleSend}
+      canSend={canSend}
+      speechStatus={speechStatus}
+      micLevel={micLevel}
+      logs={logs}
+    />
   )
 }

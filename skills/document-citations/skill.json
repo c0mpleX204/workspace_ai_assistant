@@ -1,0 +1,15 @@
+{
+  "id": "document-citations",
+  "name": "Document and Slide Citations",
+  "description": "Find relevant PDF, PPTX, DOCX, and course material passages and return page or slide citations.",
+  "triggers": ["pdf", "ppt", "pptx", "slides", "document", "course material", "课件", "资料", "幻灯片"],
+  "permissions": ["read_project_files", "read_material_index"],
+  "capabilities": [
+    {
+      "name": "cite_material",
+      "description": "Locate relevant pages or slides in indexed materials.",
+      "returns": "Citation[] with target.kind=pdf|slide|document, target.document_id, target.page_no"
+    }
+  ]
+}
+

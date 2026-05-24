@@ -1,8 +1,26 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { chatApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi } from './api'
+import { chatStreamApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi } from './api'
 import CourseChatPage from './CourseChatPage'
+import Chat from './app/Chat'
+import Settings, { DEFAULT_PROVIDER_SETTINGS, MASKED_KEY_VALUE } from './app/Settings'
+import { TerminalDock, TerminalWindow } from './app/Terminal'
+import Workspace from './app/Workspace'
+import { IconTerminal as TerminalIcon } from './shared/icons'
+import { fileToDataUrl, estimateOutputTokens } from './shared/text'
+import { Lightbox, useToast } from './shared/toast'
+import { useSpeechInput } from './shared/speech'
+import {
+  THREAD_DEFAULT_TITLE,
+  THREAD_KEY_PREFIX,
+  PROJECT_THREAD_KEY_PREFIX,
+  buildChatThreadTitle,
+  createChatThread,
+  createProjectChatThread,
+  normalizeChatThreads,
+  normalizeProjectThreads,
+} from './shared/threads'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
@@ -14,256 +32,6 @@ const IS_LIVE2D_WINDOW = APP_SEARCH_PARAMS.get('live2dWindow') === '1'
 const INITIAL_TERMINAL_SESSION_ID = APP_SEARCH_PARAMS.get('sessionId') || ''
 const INITIAL_LIVE2D_BG_URL = APP_SEARCH_PARAMS.get('bg') || ''
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = e => resolve(e.target.result)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-// ===== Icons =====
-const IconChat = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>)
-const IconBook = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>)
-const IconSettings = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)
-const IconCompanion = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg>)
-const IconImage = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>)
-const IconLogo = () => (<svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7v10l10 5 10-5V7z"/><path d="M12 2v20"/><path d="M2 7l10 5 10-5"/></svg>)
-const IconTerminal = () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>)
-const IconMic = ({ active }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" width="15" height="15" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="9" y="2" width="6" height="11" rx="3"/>
-    <path d="M5 10a7 7 0 0 0 14 0"/>
-    <line x1="12" y1="18" x2="12" y2="22"/>
-    <line x1="9" y1="22" x2="15" y2="22"/>
-    {active && <circle cx="20" cy="4" r="3" fill="#e5484d" stroke="none"/>}
-  </svg>
-)
-
-// ===== Toast =====
-function useToast() {
-  const [toast, setToast] = useState({ msg: '', type: '', visible: false })
-  const timerRef = useRef(null)
-  const show = useCallback((msg, type = 'info') => {
-    clearTimeout(timerRef.current)
-    setToast({ msg, type, visible: true })
-    timerRef.current = setTimeout(() => setToast(t => ({ ...t, visible: false })), 2800)
-  }, [])
-  return { toast, show }
-}
-
-// ===== 大图 Lightbox =====
-function Lightbox({ src, onClose }) {
-  useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
-  if (!src) return null
-  return (
-    <div className="lightbox-overlay" onClick={onClose}>
-      <img
-        className="lightbox-img"
-        src={src}
-        alt="大图预览"
-        onClick={e => e.stopPropagation()}
-      />
-      <button className="lightbox-close" onClick={onClose}>✕</button>
-    </div>
-  )
-}
-
-// ===== 语音输入 Hook（录音 + 后端 STT）=====
-function useSpeechInput(backendUrl, selectedAudioInput) {
-  const [listening, setListening] = useState(false)
-  const mediaRecorderRef = useRef(null)
-  const chunksRef = useRef([])
-  const streamRef = useRef(null)
-
-  const startListening = useCallback(async (onResult, onError) => {
-    try {
-      const constraints = { audio: selectedAudioInput ? { deviceId: { exact: selectedAudioInput } } : true }
-      const stream = await navigator.mediaDevices.getUserMedia(constraints)
-      streamRef.current = stream
-      chunksRef.current = []
-      const mr = new MediaRecorder(stream)
-      mediaRecorderRef.current = mr
-      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop())
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-        try {
-          const form = new FormData()
-          form.append('file', blob, 'audio.webm')
-          const base = backendUrl || 'http://127.0.0.1:8000'
-          const res = await fetch(base + '/stt', { method: 'POST', body: form })
-          if (!res.ok) throw new Error(await res.text())
-          const data = await res.json()
-          onResult && onResult(data.text || '')
-        } catch (err) {
-          onError && onError('语音识别失败: ' + err.message)
-        }
-        setListening(false)
-      }
-      mr.start()
-      setListening(true)
-    } catch (err) {
-      onError && onError('麦克风权限被拒绝或不可用: ' + err.message)
-      setListening(false)
-    }
-  }, [backendUrl, selectedAudioInput])
-
-  const stopListening = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop()
-    } else {
-      streamRef.current?.getTracks().forEach(t => t.stop())
-      setListening(false)
-    }
-  }, [])
-
-  return { listening, startListening, stopListening }
-}
-
-// ===== 消息气泡 =====
-function Message({ m, onImageClick, onTts }) {
-  return (
-    <div className={`msg-row ${m.role}`}>
-      <div className="msg-meta">
-        {m.role === 'user' ? '你' : 'AI'}
-        {m.role === 'assistant' && onTts && m.content && (
-          <button
-            className="tts-play-btn"
-            title="朗读"
-            onClick={() => onTts(m.content)}
-            style={{marginLeft:6,background:'none',border:'none',cursor:'pointer',opacity:0.6,fontSize:13,padding:'0 2px',color:'inherit'}}
-          >&#128266;</button>
-        )}
-      </div>
-      <div className="msg-bubble">
-        {m.images && m.images.length > 0 && (
-          <div className="msg-images">
-            {m.images.map((src, i) => (
-              <img
-                key={i}
-                className="msg-img msg-img-clickable"
-                src={src}
-                alt=""
-                title="点击查看大图"
-                onClick={() => onImageClick && onImageClick(src)}
-              />
-            ))}
-          </div>
-        )}
-        {m.content && <span>{m.content}</span>}
-      </div>
-      {m.role === 'assistant' && m.refs && m.refs.length > 0 && (
-        <div className="refs">{m.refs.map((r, i) => (
-          <div className="ref-item" key={i}>
-            <span className="ref-badge">{r.ref_id}</span>
-            <span>
-              {r.doucument_title}{r.page_no != null ? ` · p${r.page_no}` : ''} — {r.summary}
-              {r.source_path && <span className="ref-path" title={r.source_path}>{r.source_path}</span>}
-            </span>
-          </div>
-        ))}</div>
-      )}
-    </div>
-  )
-}
-function TypingIndicator() {
-  return (
-    <div className="msg-row assistant">
-      <div className="msg-meta">AI</div>
-      <div className="typing-indicator"><div className="typing-dot"/><div className="typing-dot"/><div className="typing-dot"/></div>
-    </div>
-  )
-}
-
-const THREAD_KEY_PREFIX = 'desktop_chat_threads_v1:'
-const PROJECT_THREAD_KEY_PREFIX = 'project_chat_threads_v1:'
-const THREAD_DEFAULT_TITLE = '新对话'
-const MASKED_KEY_VALUE = '••••••••'
-const PROVIDER_API_PLACEHOLDER = 'https://api.deepseek.com'
-const DEFAULT_PROVIDER_SETTINGS = {
-  api_base_url: '',
-  api_key_masked: '',
-  has_api_key: false,
-  fast_model: '',
-  heavy_model: '',
-}
-
-function buildChatThreadTitle(messages) {
-  const firstUser = (messages || []).find(x => x?.role === 'user' && String(x?.content || '').trim())
-  if (!firstUser) return THREAD_DEFAULT_TITLE
-  const text = String(firstUser.content || '').trim().replace(/\s+/g, ' ')
-  return text.slice(0, 18) || THREAD_DEFAULT_TITLE
-}
-
-function normalizeThreadTitle(value, fallback = THREAD_DEFAULT_TITLE) {
-  const text = String(value || '').trim()
-  if (!text || text === 'New chat') return fallback
-  return text
-}
-
-function createChatThread(id = '') {
-  const now = Date.now()
-  return {
-    id: id || `chat_${now}_${Math.random().toString(36).slice(2, 8)}`,
-    title: THREAD_DEFAULT_TITLE,
-    messages: [],
-    createdAt: now,
-    updatedAt: now,
-  }
-}
-
-function createProjectChatThread(courseId, id = '') {
-  const now = Date.now()
-  return {
-    id: id || `course_${courseId}_${now}_${Math.random().toString(36).slice(2, 8)}`,
-    title: THREAD_DEFAULT_TITLE,
-    createdAt: now,
-    updatedAt: now,
-  }
-}
-
-function normalizeChatThreads(raw) {
-  if (!Array.isArray(raw)) return []
-  const cleaned = raw
-    .filter(x => x && typeof x.id === 'string' && x.id.trim())
-    .map(x => {
-      const msgs = Array.isArray(x.messages) ? x.messages : []
-      return {
-        id: String(x.id),
-        title: normalizeThreadTitle(x.title, buildChatThreadTitle(msgs)),
-        messages: msgs,
-        createdAt: Number(x.createdAt || Date.now()),
-        updatedAt: Number(x.updatedAt || Date.now()),
-      }
-    })
-  return cleaned
-}
-
-function normalizeProjectThreads(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const result = {}
-  for (const [courseId, items] of Object.entries(raw)) {
-    if (!Array.isArray(items)) continue
-    const cleaned = items
-      .filter(x => x && typeof x.id === 'string' && x.id.trim())
-      .map(x => ({
-        id: String(x.id),
-        title: normalizeThreadTitle(x.title),
-        createdAt: Number(x.createdAt || Date.now()),
-        updatedAt: Number(x.updatedAt || Date.now()),
-      }))
-    if (cleaned.length > 0) result[String(courseId)] = cleaned
-  }
-  return result
-}
-
-// ===== 主应用 =====
 export default function App() {
   const LIVE2D_BG_KEY = 'desktop_live2d_bg_url_v1'
   const [backendUrl, setBackendUrl] = useState(() => window.env?.BACKEND_URL || 'http://127.0.0.1:8000')
@@ -287,8 +55,6 @@ export default function App() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [lastLatency, setLastLatency] = useState(null)
-  const [useRetrieval, setUseRetrieval] = useState(false)
-  const [useWebSearch, setUseWebSearch] = useState(false)
   const [pendingImages, setPendingImages] = useState([])
   const [isDragging, setIsDragging] = useState(false)
   // 大图预览
@@ -310,7 +76,15 @@ export default function App() {
   const [activeTerminalId, setActiveTerminalId] = useState('')
   const [terminalHeight, setTerminalHeight] = useState(320)
   const [terminalResizing, setTerminalResizing] = useState(false)
+  const [workspaceSidebarWidth, setWorkspaceSidebarWidth] = useState(() => {
+    try {
+      const value = Number(localStorage.getItem('workspace_sidebar_width_v1') || 292) || 292
+      return Math.max(220, Math.min(520, value))
+    } catch { return 292 }
+  })
+  const [workspaceSidebarResizing, setWorkspaceSidebarResizing] = useState(false)
 
+  const appRef = useRef(null)
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const composerRef = useRef(null)
@@ -476,6 +250,34 @@ export default function App() {
     }
   }, [live2dBgUrl])
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('workspace_sidebar_width_v1', String(Math.round(workspaceSidebarWidth)))
+    } catch (e) {
+      void e
+    }
+  }, [workspaceSidebarWidth])
+
+  useEffect(() => {
+    if (!workspaceSidebarResizing) return
+    const onMove = (e) => {
+      const rect = appRef.current?.getBoundingClientRect()
+      const left = rect?.left || 0
+      const total = rect?.width || window.innerWidth
+      const max = Math.max(280, Math.min(520, total - 560))
+      setWorkspaceSidebarWidth(Math.max(220, Math.min(max, e.clientX - left)))
+    }
+    const onUp = () => setWorkspaceSidebarResizing(false)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    document.body.classList.add('is-pane-resizing')
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('is-pane-resizing')
+    }
+  }, [workspaceSidebarResizing])
+
   const loadProviderSettings = useCallback(async (showErrors = false) => {
     try {
       const res = await getProviderSettingsApi(backendUrl)
@@ -578,6 +380,17 @@ export default function App() {
     setInput('')
     setPendingImages([])
     setLastLatency(null)
+  }
+
+  function closeProjectThread(courseId, threadId) {
+    const key = String(courseId)
+    const current = projectThreads[key] || []
+    const remaining = current.filter(thread => thread.id !== threadId)
+    const nextThreads = remaining.length > 0 ? remaining : [createProjectChatThread(courseId)]
+    setProjectThreads(prev => ({ ...prev, [key]: nextThreads }))
+    if (activeCourse?.course_id === courseId && activeProjectThreadId === threadId) {
+      setActiveProjectThreadId(nextThreads[0].id)
+    }
   }
 
   async function createProjectFromSidebar() {
@@ -722,6 +535,15 @@ export default function App() {
 
   async function openProjectTerminal() {
     return createProjectTerminal({ forceNew: false })
+  }
+
+  async function runProjectCommandInTerminal(command) {
+    const text = String(command || '').trim()
+    if (!text) return { ok: false, error: 'empty command' }
+    const session = await createProjectTerminal({ forceNew: false })
+    if (!session?.sessionId) return { ok: false, error: 'terminal unavailable' }
+    await writeTerminalInput(session.sessionId, text.endsWith('\r') || text.endsWith('\n') ? text : `${text}\r`)
+    return { ok: true, sessionId: session.sessionId }
   }
 
   async function newProjectTerminal() {
@@ -1038,22 +860,89 @@ export default function App() {
     const text = input.trim()
     if (!text && pendingImages.length === 0) return
     const imgs = [...pendingImages]
-    const userMsg = { role: 'user', content: text }
-    setMessages(m => [...m, { ...userMsg, images: imgs }])
+    const userMsg = { role: 'user', content: text, created_at: new Date().toISOString() }
+    const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const patchAssistant = updater => {
+      setMessages(prev => prev.map(item => {
+        if (item.id !== assistantId) return item
+        const patch = typeof updater === 'function' ? updater(item) : updater
+        return { ...item, ...patch }
+      }))
+    }
+    setMessages(m => [
+      ...m,
+      { ...userMsg, images: imgs },
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        refs: [],
+        activity: [],
+        usage: { pending: true, output_tokens_estimate: 0 },
+        model: '',
+        streaming: true,
+        created_at: new Date().toISOString(),
+      },
+    ])
     setInput(''); setPendingImages([]); setLoading(true); setLastLatency(null)
     try {
       const payload = {
         user_id: userId,
         session_id: activeThreadId,
         messages: [userMsg],
-        use_retrieval: useRetrieval,
-        use_web_search: useWebSearch,
       }
       // 有图片时：把第一张 base64 作为 image_url 发给后端
       if (imgs.length > 0) payload.image_url = imgs[0]
-      const resp = await chatApi(backendUrl, payload)
-      const replyText = resp.reply || ''
-      setMessages(m => [...m, { role: 'assistant', content: replyText, refs: resp.reference || [] }])
+      let doneReceived = false
+      let replyText = ''
+      let latestUsage = null
+      let latestRefs = []
+      const resp = await chatStreamApi(backendUrl, payload, {
+        onDelta: (_delta, fullText) => {
+          replyText = fullText
+          patchAssistant(item => ({
+            content: fullText,
+            usage: item.usage?.pending
+              ? { ...item.usage, output_tokens_estimate: estimateOutputTokens(fullText) }
+              : item.usage,
+            streaming: true,
+          }))
+        },
+        onStatus: status => {
+          patchAssistant(item => ({
+            activity: [...(item.activity || []), status].slice(-8),
+          }))
+        },
+        onUsage: usage => {
+          latestUsage = usage
+          patchAssistant({ usage })
+        },
+        onDone: done => {
+          doneReceived = true
+          replyText = done.reply || replyText
+          latestUsage = done.usage || latestUsage
+          latestRefs = done.reference || []
+          patchAssistant({
+            content: replyText,
+            refs: latestRefs,
+            usage: latestUsage || null,
+            model: done.model || '',
+            streaming: false,
+            completed_at: new Date().toISOString(),
+          })
+          if (done.latency_ms) setLastLatency(done.latency_ms)
+        },
+      })
+      if (!doneReceived) {
+        replyText = resp.reply || replyText
+        patchAssistant({
+          content: replyText,
+          refs: latestRefs,
+          usage: latestUsage || null,
+          streaming: false,
+          completed_at: new Date().toISOString(),
+        })
+      }
       if (resp.latency_ms) setLastLatency(resp.latency_ms)
       // TTS：调用后端接口朗读 AI 回复
       if (ttsEnabled && replyText) {
@@ -1081,7 +970,12 @@ export default function App() {
         } catch(e) { showToast('TTS 请求异常: ' + e.message, 'error') }
       }
     } catch (err) {
-      setMessages(m => [...m, { role: 'assistant', content: '请求失败：' + (err?.message || err) }])
+      patchAssistant({
+        content: '请求失败：' + (err?.message || err),
+        refs: [],
+        usage: null,
+        streaming: false,
+      })
       showToast('请求失败', 'error')
     } finally { setLoading(false) }
   }
@@ -1134,127 +1028,16 @@ export default function App() {
 
   const canSend = (input.trim() || pendingImages.length > 0) && !loading
 
-  const WorkspaceSidebar = () => (
-    <aside className="workspace-sidebar">
-      <div className="workspace-brand">
-        <div className="workspace-logo"><IconLogo /></div>
-        <div>
-          <div className="workspace-title">Workspace</div>
-          <div className="workspace-subtitle">{userId || 'user1'}</div>
-        </div>
-      </div>
-
-      <button className="workspace-new-btn" onClick={newThread}>
-        <span>+</span>
-        <span>新对话</span>
-      </button>
-
-      <div className="workspace-scroll">
-        <div className="workspace-section">
-          <div className="workspace-section-title">无项目</div>
-          <div className="workspace-thread-list">
-            {sortedThreads.map(thread => (
-              <button
-                key={thread.id}
-                className={`workspace-thread ${page === 'chat' && activeThreadId === thread.id ? 'active' : ''}`}
-                onClick={() => openThread(thread.id)}
-                title={thread.title || THREAD_DEFAULT_TITLE}
-              >
-                <IconChat />
-                <span>{thread.title || THREAD_DEFAULT_TITLE}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="workspace-section">
-          <div className="workspace-section-head">
-            <span className="workspace-section-title">项目</span>
-            <button className="workspace-icon-btn" onClick={createProjectFromSidebar} title="新建项目">+</button>
-          </div>
-          {coursesLoading && <div className="workspace-empty">加载项目中...</div>}
-          {!coursesLoading && courses.length === 0 && <div className="workspace-empty">暂无项目</div>}
-          {courses.map(course => {
-            const key = String(course.course_id)
-            const threads = projectThreads[key] || []
-            const isActiveProject = page === 'course_chat' && activeCourse?.course_id === course.course_id
-            return (
-              <div className={`workspace-project ${isActiveProject ? 'active' : ''}`} key={course.course_id}>
-                <div className="workspace-project-row">
-                  <button className="workspace-project-main" onClick={() => openProject(course)} title={course.project_path || course.name}>
-                    <IconBook />
-                    <span>{course.name}</span>
-                  </button>
-                  <button className="workspace-icon-btn" onClick={() => newProjectThread(course)} title="新建项目对话">+</button>
-                </div>
-                <div className="workspace-thread-list project-thread-list">
-                  {(threads.length ? threads : [createProjectChatThread(course.course_id, `course_${course.course_id}_${sessionId || 'default'}`)]).map(thread => (
-                    <button
-                      key={thread.id}
-                      className={`workspace-thread nested ${isActiveProject && activeProjectThreadId === thread.id ? 'active' : ''}`}
-                      onClick={() => openProject(course, thread.id)}
-                      title={thread.title || THREAD_DEFAULT_TITLE}
-                    >
-                      <IconChat />
-                      <span>{thread.title || THREAD_DEFAULT_TITLE}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      <div className="workspace-bottom">
-        <button className={`workspace-nav-btn ${page === 'companion' ? 'active' : ''}`} onClick={() => setPage('companion')}>
-          <IconCompanion />
-          <span>陪伴聊天</span>
-        </button>
-        <button className={`workspace-nav-btn ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}>
-          <IconSettings />
-          <span>设置</span>
-        </button>
-      </div>
-    </aside>
-  )
-
   if (IS_TERMINAL_WINDOW) {
     return (
-      <div className="terminal-window-only">
-        <div className="terminal-panel terminal-popout-panel" style={{ height: '100vh' }}>
-          <div className="terminal-panel-head terminal-window-head">
-            <div className="terminal-title">
-              <IconTerminal />
-              <span>PowerShell</span>
-              <code title={activeTerminal?.cwd || ''}>{activeTerminal?.cwd || '终端窗口'}</code>
-            </div>
-            <div className="terminal-actions">
-              <button type="button" className="ghost-btn small" onClick={newProjectTerminal}>+</button>
-              <button type="button" className="ghost-btn small" onClick={() => closeProjectTerminal(activeTerminal?.sessionId)}>结束</button>
-            </div>
-          </div>
-          <div className="terminal-tabs">
-            {terminalSessions.map((session, idx) => (
-              <button
-                key={session.sessionId}
-                type="button"
-                className={`terminal-tab${session.sessionId === activeTerminal?.sessionId ? ' active' : ''}`}
-                onClick={() => setActiveTerminalId(session.sessionId)}
-                title={session.cwd}
-              >
-                <span>{session.title || `终端 ${idx + 1}`}</span>
-                {session.status === 'exited' && <em>已退出</em>}
-              </button>
-            ))}
-          </div>
-          <div
-            className="terminal-screen"
-            ref={terminalContainerRef}
-            title="这是完整 PTY 终端，直接输入即可"
-          />
-        </div>
-      </div>
+      <TerminalWindow
+        activeTerminal={activeTerminal}
+        sessions={terminalSessions}
+        screenRef={terminalContainerRef}
+        onSelect={setActiveTerminalId}
+        onNew={newProjectTerminal}
+        onClose={closeProjectTerminal}
+      />
     )
   }
 
@@ -1274,16 +1057,36 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${workspaceSidebarResizing ? ' is-resizing' : ''}`} ref={appRef}>
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
-      <WorkspaceSidebar />
+      <Workspace
+        width={workspaceSidebarWidth}
+        userId={userId}
+        page={page}
+        activeThreadId={activeThreadId}
+        sortedThreads={sortedThreads}
+        onNewThread={newThread}
+        onOpenThread={openThread}
+        courses={courses}
+        coursesLoading={coursesLoading}
+        projectThreads={projectThreads}
+        activeCourse={activeCourse}
+        activeProjectThreadId={activeProjectThreadId}
+        sessionId={sessionId}
+        onCreateProject={createProjectFromSidebar}
+        onOpenProject={openProject}
+        onNewProjectThread={newProjectThread}
+        onPage={setPage}
+      />
+      <div
+        className="workspace-sidebar-resizer"
+        onMouseDown={(e) => { e.preventDefault(); setWorkspaceSidebarResizing(true) }}
+      />
       <div className="main">
         <div className="topbar">
           <span className="topbar-title">
             {page==='course_chat' ? (activeCourse?.name || '项目对话') : page==='chat' ? '无项目对话' : page==='companion' ? '陪伴聊天' : '设置'}
           </span>
-          {page==='chat' && useRetrieval && <span className="topbar-tag">RAG</span>}
-          {page==='chat' && useWebSearch && <span className="topbar-tag">联网</span>}
           {page==='course_chat' && activeProjectThread && <span className="topbar-tag">{activeProjectThread.title || THREAD_DEFAULT_TITLE}</span>}
           <div className="topbar-spacer"/>
           {page==='course_chat' && activeCourse && (
@@ -1292,7 +1095,7 @@ export default function App() {
               onClick={openProjectTerminal}
               className={`ghost-btn small topbar-terminal-btn${terminalOpen ? ' active' : ''}`}
             >
-              <IconTerminal />
+              <TerminalIcon />
               <span>CLI</span>
             </button>
           )}
@@ -1312,56 +1115,27 @@ export default function App() {
         </div>
 
         {page==='chat' && (
-          <>
-            <div className="chat-area">
-              {messages.length===0 && <div className="chat-empty"><div className="chat-empty-icon"><IconChat/></div><p>发送消息开始对话，支持图片和语音输入</p></div>}
-              {messages.map((m,i)=><Message key={i} m={m} onImageClick={src => setLightboxSrc(src)} onTts={handleTtsPlay}/>)}
-              {loading && <TypingIndicator/>}
-              <div ref={messagesEndRef}/>
-            </div>
-            <div className={`composer-wrap${isDragging?' drag-over':''}`} ref={composerRef}
-              onDragOver={e=>{e.preventDefault();setIsDragging(true)}}
-              onDragLeave={e=>{if(!composerRef.current?.contains(e.relatedTarget))setIsDragging(false)}}
-              onDrop={async e=>{e.preventDefault();setIsDragging(false);for(const f of Array.from(e.dataTransfer.files).filter(f=>f.type.startsWith('image/')))await addImageFile(f)}}
-            >
-              {isDragging && <div className="drop-overlay"><div className="drop-overlay-inner"><span>松开放入图片</span></div></div>}
-              <div className="composer-box">
-                {pendingImages.length > 0 && (
-                  <div className="composer-images">
-                    {pendingImages.map((src,i)=>(
-                      <div key={i} className="composer-img-thumb">
-                        <img src={src} alt=""/>
-                        <button className="composer-img-remove" onClick={()=>setPendingImages(p=>p.filter((_,j)=>j!==i))}>x</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <textarea ref={textareaRef} className="composer-textarea" value={input}
-                  onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown} onPaste={handlePaste}
-                  placeholder="发送消息… Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片" disabled={loading} rows={1}/>
-                <div className="composer-toolbar">
-                  <label className="composer-icon-btn" title="附加图片">
-                    <IconImage/>
-                    <input type="file" accept="image/*" style={{display:'none'}} onChange={async e=>{if(e.target.files[0]){await addImageFile(e.target.files[0]);e.target.value=''}}} />
-                  </label>
-                  <button
-                    className={`composer-icon-btn mic-btn${listening?' mic-active':''}`}
-                    title={listening ? '点击停止录音' : '语音输入'}
-                    onClick={handleMicClick}
-                  >
-                    <IconMic active={listening} />
-                  </button>
-                  <div className="composer-divider"/>
-                  <button className={`retrieval-toggle ${useRetrieval?'active':''}`} onClick={()=>setUseRetrieval(v=>!v)}>🔍 检索</button>
-                  <button className={`retrieval-toggle ${useWebSearch?'active':''}`} onClick={()=>setUseWebSearch(v=>!v)} style={{marginLeft:4}}>🌐 联网</button>
-                  <div className="composer-spacer"/>
-                  <button className="send-btn" onClick={handleSend} disabled={!canSend} title="发送">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="14" height="14"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
+          <Chat
+            messages={messages}
+            loading={loading}
+            messagesEndRef={messagesEndRef}
+            composerRef={composerRef}
+            textareaRef={textareaRef}
+            input={input}
+            setInput={setInput}
+            pendingImages={pendingImages}
+            setPendingImages={setPendingImages}
+            isDragging={isDragging}
+            setIsDragging={setIsDragging}
+            listening={listening}
+            onMic={handleMicClick}
+            onSend={handleSend}
+            onPaste={handlePaste}
+            onAddImage={addImageFile}
+            onImageClick={src => setLightboxSrc(src)}
+            onTts={handleTtsPlay}
+            canSend={canSend}
+          />
         )}
 
         {page==='course_chat' && activeCourse && activeProjectThread && (
@@ -1375,60 +1149,33 @@ export default function App() {
               showToast={showToast}
               onBack={() => setPage('chat')}
               onThreadTitleChange={updateProjectThreadTitle}
+              projectThreads={activeProjectThreads}
+              activeThreadId={activeProjectThread.id}
+              onOpenThread={(threadId) => openProject(activeCourse, threadId)}
+              onNewThread={() => newProjectThread(activeCourse)}
+              onCloseThread={(threadId) => closeProjectThread(activeCourse.course_id, threadId)}
+              onInteractiveTerminalCommand={runProjectCommandInTerminal}
             />
           </div>
         )}
 
         {page==='course_chat' && activeCourse && terminalOpen && (
-          <div className={`terminal-panel${terminalResizing ? ' is-resizing' : ''}`} style={{ height: terminalHeight }}>
-            <div
-              className="terminal-resize-handle"
-              title="上下拖动调整终端高度"
-              onMouseDown={startTerminalResize}
-            />
-            <div
-              className="terminal-panel-head"
-              onMouseDown={startTerminalPopoutDrag}
-              title="拖动标题栏可弹出为独立终端窗口"
-            >
-              <div className="terminal-title">
-                <IconTerminal />
-                <span>PowerShell</span>
-                <code title={activeTerminal?.cwd || activeCourse.project_path || ''}>
-                  {activeTerminal?.cwd || activeCourse.project_path || '项目目录'}
-                </code>
-              </div>
-              <div className="terminal-actions">
-                <button type="button" className="ghost-btn small" onClick={newProjectTerminal}>+</button>
-                <button type="button" className="ghost-btn small" onClick={() => popoutTerminal(activeTerminal?.sessionId)}>弹出</button>
-                <button type="button" className="ghost-btn small" onClick={() => setTerminalOpen(false)}>收起</button>
-                <button type="button" className="ghost-btn small" onClick={() => closeProjectTerminal(activeTerminal?.sessionId)}>结束</button>
-              </div>
-            </div>
-            <div className="terminal-tabs">
-              {terminalSessions.map((session, idx) => (
-                <button
-                  key={session.sessionId}
-                  type="button"
-                  className={`terminal-tab${session.sessionId === activeTerminal?.sessionId ? ' active' : ''}`}
-                  onClick={() => setActiveTerminalId(session.sessionId)}
-                  title={session.cwd}
-                >
-                  <span>{session.title || `终端 ${idx + 1}`}</span>
-                  {session.status === 'exited' && <em>已退出</em>}
-                </button>
-              ))}
-            </div>
-            <div
-              className="terminal-screen"
-              ref={terminalContainerRef}
-              onDoubleClick={() => popoutTerminal(activeTerminal?.sessionId)}
-              title="这是完整 PTY 终端，直接输入即可；双击弹出窗口"
-            />
-          </div>
+          <TerminalDock
+            activeCourse={activeCourse}
+            activeTerminal={activeTerminal}
+            sessions={terminalSessions}
+            height={terminalHeight}
+            resizing={terminalResizing}
+            screenRef={terminalContainerRef}
+            onResizeStart={startTerminalResize}
+            onDragTitle={startTerminalPopoutDrag}
+            onSelect={setActiveTerminalId}
+            onNew={newProjectTerminal}
+            onPopout={popoutTerminal}
+            onCollapse={() => setTerminalOpen(false)}
+            onClose={closeProjectTerminal}
+          />
         )}
-
-
 
         {page==='companion' && (
           <Suspense fallback={null}>
@@ -1444,127 +1191,29 @@ export default function App() {
           </Suspense>
         )}
         {page==='settings' && (
-          <div className="page-container">
-            <div className="page-title">设置</div>
-
-            <div className="settings-card">
-              <div className="settings-card-title">服务连接</div>
-              <div className="field-group">
-                <div className="field">
-                  <label className="field-label">后端地址</label>
-                  <input className="field-input" value={backendUrl} onChange={e=>setBackendUrl(e.target.value)} placeholder="http://127.0.0.1:8000"/>
-                </div>
-                <div className="field">
-                  <label className="field-label">用户 ID</label>
-                  <input className="field-input" value={userId} onChange={e=>setUserId(e.target.value)} placeholder="user1"/>
-                </div>
-              </div>
-            </div>
-
-            <div className="settings-card">
-              <div className="settings-card-title">模型 API</div>
-              <div className="field-group">
-                <div className="field">
-                  <label className="field-label">API 地址</label>
-                  <input
-                    className="field-input"
-                    value={providerDraft.api_base_url}
-                    onChange={e => setProviderDraft(v => ({ ...v, api_base_url: e.target.value }))}
-                    placeholder={PROVIDER_API_PLACEHOLDER}
-                  />
-                </div>
-                <div className="field">
-                  <label className="field-label">API Key</label>
-                  <input
-                    className="field-input"
-                    type="password"
-                    autoComplete="off"
-                    value={providerDraft.api_key}
-                    onFocus={() => {
-                      if (providerDraft.api_key === MASKED_KEY_VALUE) {
-                        setProviderDraft(v => ({ ...v, api_key: '' }))
-                      }
-                    }}
-                    onChange={e => setProviderDraft(v => ({ ...v, api_key: e.target.value }))}
-                    placeholder={providerSettings.has_api_key ? '已保存，输入新 Key 可替换' : 'DeepSeek API Key'}
-                  />
-                </div>
-                <div className="provider-model-grid">
-                  <div className="provider-model-item">
-                    <span>轻对话模型</span>
-                    <strong>{providerSettings.fast_model || '后端读取中'}</strong>
-                  </div>
-                  <div className="provider-model-item">
-                    <span>重任务模型</span>
-                    <strong>{providerSettings.heavy_model || '后端读取中'}</strong>
-                  </div>
-                </div>
-                <div className="field-row">
-                  <button className="ghost-btn" onClick={saveProviderSettings} disabled={savingProvider}>
-                    {savingProvider ? '保存中' : '保存模型 API'}
-                  </button>
-                  <button className="ghost-btn" onClick={() => loadProviderSettings(true)} disabled={savingProvider}>
-                    重新读取
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="settings-card">
-              <div className="settings-card-title">显示</div>
-              <div className="field-group">
-                <div className="field">
-                  <label className="field-label">Live2D 背景图 URL</label>
-                  <div className="field-row">
-                    <input
-                      className="field-input"
-                      value={live2dBgUrl}
-                      onChange={e => setLive2dBgUrl(e.target.value)}
-                      placeholder="https://... 或留空使用默认背景"
-                    />
-                    <button className="ghost-btn" onClick={() => setLive2dBgUrl('')} title="恢复默认背景">清空</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="settings-card">
-              <div className="settings-card-title">音频设备</div>
-              <div className="field-group">
-                <div className="field">
-                  <label className="field-label">麦克风（输入）</label>
-                  <div className="field-row">
-                    <select className="field-input field-select" value={selectedAudioInput} onChange={e => setSelectedAudioInput(e.target.value)}>
-                      <option value="">系统默认</option>
-                      {audioInputs.map(d => (
-                        <option key={d.deviceId} value={d.deviceId}>{d.label || `麦克风 ${d.deviceId.slice(0,8)}`}</option>
-                      ))}
-                    </select>
-                    <button className="ghost-btn" onClick={requestMicPermission} title="授权后可显示设备名称">授权</button>
-                  </div>
-                </div>
-                <div className="field">
-                  <label className="field-label">扬声器（输出）</label>
-                  <select className="field-input field-select" value={selectedAudioOutput} onChange={e => setSelectedAudioOutput(e.target.value)}>
-                    <option value="">系统默认</option>
-                    {audioOutputs.map(d => (
-                      <option key={d.deviceId} value={d.deviceId}>{d.label || `扬声器 ${d.deviceId.slice(0,8)}`}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field">
-                  <label className="field-label">AI 回复朗读（TTS）</label>
-                  <button
-                    className={`retrieval-toggle${ttsEnabled?' active':''}`}
-                    onClick={() => setTtsEnabled(v => !v)}
-                    style={{alignSelf:'flex-start'}}
-                  >
-                    {ttsEnabled ? '已开启' : '已关闭'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <Settings
+            backendUrl={backendUrl}
+            setBackendUrl={setBackendUrl}
+            userId={userId}
+            setUserId={setUserId}
+            providerDraft={providerDraft}
+            setProviderDraft={setProviderDraft}
+            providerSettings={providerSettings}
+            savingProvider={savingProvider}
+            saveProviderSettings={saveProviderSettings}
+            loadProviderSettings={loadProviderSettings}
+            live2dBgUrl={live2dBgUrl}
+            setLive2dBgUrl={setLive2dBgUrl}
+            audioInputs={audioInputs}
+            audioOutputs={audioOutputs}
+            selectedAudioInput={selectedAudioInput}
+            setSelectedAudioInput={setSelectedAudioInput}
+            selectedAudioOutput={selectedAudioOutput}
+            setSelectedAudioOutput={setSelectedAudioOutput}
+            requestMicPermission={requestMicPermission}
+            ttsEnabled={ttsEnabled}
+            setTtsEnabled={setTtsEnabled}
+          />
         )}
       </div>
       <div className={`toast ${toast.type} ${toast.visible?'show':''}`}>{toast.msg}</div>

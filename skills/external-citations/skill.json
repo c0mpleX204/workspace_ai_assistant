@@ -1,0 +1,15 @@
+{
+  "id": "external-citations",
+  "name": "External Citations",
+  "description": "Return citations for external systems such as GitHub, web pages, issues, pull requests, or databases.",
+  "triggers": ["github", "web", "url", "issue", "pull request", "database", "网页", "链接", "数据库"],
+  "permissions": ["network_optional"],
+  "capabilities": [
+    {
+      "name": "cite_external",
+      "description": "Create citations for external resources.",
+      "returns": "Citation[] with target.kind=web|github|database and target.url or external identifiers"
+    }
+  ]
+}
+

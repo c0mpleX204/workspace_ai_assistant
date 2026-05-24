@@ -3,12 +3,14 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from server.api.routers.agent_runs_router import router as agent_runs_router
 from server.api.routers.chat_router import router as chat_router
 from server.api.routers.companion_router import router as companion_router
 from server.api.routers.courses_router import router as courses_router
 from server.api.routers.health_router import router as health_router
 from server.api.routers.materials_router import router as materials_router
 from server.api.routers.speech_router import router as speech_router
+from server.api.routers.skills_router import router as skills_router
 from server.config.config import settings
 from server.runtime.startup import run_startup_tasks, shutdown_workers
 from server.services.companion_task_service import shutdown_task_pool
@@ -27,11 +29,13 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(agent_runs_router)
 app.include_router(chat_router)
 app.include_router(materials_router)
 app.include_router(courses_router)
 app.include_router(companion_router)
 app.include_router(speech_router)
+app.include_router(skills_router)
 
 
 @app.on_event("startup")

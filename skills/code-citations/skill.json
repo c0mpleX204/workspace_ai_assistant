@@ -1,0 +1,15 @@
+{
+  "id": "code-citations",
+  "name": "Code Citations",
+  "description": "Find relevant code snippets and return citations with file paths and line ranges.",
+  "triggers": ["code", "source", "function", "bug", "implementation", "代码", "源码", "函数"],
+  "permissions": ["read_project_files"],
+  "capabilities": [
+    {
+      "name": "cite_code",
+      "description": "Locate source files and return code citations.",
+      "returns": "Citation[] with target.kind=code, target.path, target.line_start, target.line_end"
+    }
+  ]
+}
+

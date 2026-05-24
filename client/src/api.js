@@ -200,10 +200,25 @@ export async function chatStreamApi(baseUrl, payload, handlers = {}) {
         if (handlers.onDelta) handlers.onDelta(String(obj.delta), fullText)
       }
 
+      if (obj.usage && handlers.onUsage) {
+        handlers.onUsage(obj.usage)
+      }
+
+      if (obj.status && handlers.onStatus) {
+        handlers.onStatus(obj.status)
+      }
+
       if (obj.done) {
         if (obj.reply && !fullText) fullText = String(obj.reply)
         if (handlers.onDone) handlers.onDone(obj)
-        return { done: true, reply: fullText, latency_ms: Number(obj.latency_ms || 0) }
+        return {
+          done: true,
+          reply: fullText,
+          latency_ms: Number(obj.latency_ms || 0),
+          usage: obj.usage || null,
+          reference: obj.reference || [],
+          model: obj.model || '',
+        }
       }
     }
 
@@ -231,7 +246,103 @@ export async function chatStreamApi(baseUrl, payload, handlers = {}) {
   }
 
   if (handlers.onDone) handlers.onDone({ done: true, reply: fullText, latency_ms: 0 })
-  return { done: true, reply: fullText, latency_ms: 0 }
+  return { done: true, reply: fullText, latency_ms: 0, usage: null, reference: [], model: '' }
+}
+
+export async function agentRunStreamApi(baseUrl, payload, handlers = {}) {
+  const url = `${getBackend(baseUrl)}/agent/runs/stream`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: handlers.signal,
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    try {
+      const j = JSON.parse(text)
+      throw new Error(j.detail || JSON.stringify(j))
+    } catch (e) {
+      if (e.message !== text) throw e
+      throw new Error(text || res.statusText)
+    }
+  }
+
+  if (!res.body) throw new Error('agent run stream body is empty')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let fullText = ''
+
+  const parseEventChunk = (rawChunk) => {
+    const lines = rawChunk
+      .split('\n')
+      .map(x => x.trim())
+      .filter(Boolean)
+      .filter(x => x.startsWith('data:'))
+
+    for (const line of lines) {
+      const payloadText = line.slice(5).trim()
+      if (!payloadText) continue
+      let obj
+      try {
+        obj = JSON.parse(payloadText)
+      } catch {
+        continue
+      }
+
+      if (obj.error) throw new Error(String(obj.error))
+      if (obj.run && handlers.onRun) handlers.onRun(obj.run)
+      if (obj.plan && handlers.onPlan) handlers.onPlan(obj.plan)
+      if (obj.status && handlers.onStatus) handlers.onStatus(obj.status)
+      if (obj.operation && handlers.onOperation) handlers.onOperation(obj.operation)
+      if (obj.usage && handlers.onUsage) handlers.onUsage(obj.usage)
+      if (obj.delta) {
+        fullText += String(obj.delta)
+        if (handlers.onDelta) handlers.onDelta(String(obj.delta), fullText)
+      }
+
+      if (obj.done) {
+        if (obj.reply && !fullText) fullText = String(obj.reply)
+        if (handlers.onDone) handlers.onDone(obj)
+        return {
+          done: true,
+          reply: fullText,
+          latency_ms: Number(obj.latency_ms || 0),
+          usage: obj.usage || null,
+          reference: obj.reference || [],
+          model: obj.model || '',
+          run: obj.run || null,
+          plan: obj.plan || [],
+          operations: obj.operations || [],
+        }
+      }
+    }
+    return null
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const chunk = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      const end = parseEventChunk(chunk)
+      if (end?.done) return end
+    }
+  }
+
+  if (buffer.trim()) {
+    const end = parseEventChunk(buffer)
+    if (end?.done) return end
+  }
+
+  if (handlers.onDone) handlers.onDone({ done: true, reply: fullText, latency_ms: 0 })
+  return { done: true, reply: fullText, latency_ms: 0, usage: null, reference: [], model: '', run: null, plan: [], operations: [] }
 }
 
 export async function listMaterialsApi(baseUrl, courseId) {
@@ -315,6 +426,44 @@ export async function updateCourseApi(baseUrl, courseId, payload) {
   })
   const text = await res.text()
   if (!res.ok) { try { const j = JSON.parse(text); throw new Error(j.detail || text) } catch(e) { throw e } }
+  return JSON.parse(text)
+}
+
+export async function listWorkspaceFilesApi(baseUrl, courseId) {
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/tree`
+  const res = await fetch(url)
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function readWorkspaceFileApi(baseUrl, courseId, path) {
+  const params = new URLSearchParams({ path: String(path || '') })
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/file?${params.toString()}`
+  const res = await fetch(url)
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function saveWorkspaceFileApi(baseUrl, courseId, payload) {
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/file`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
   return JSON.parse(text)
 }
 

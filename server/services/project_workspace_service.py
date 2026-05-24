@@ -2,6 +2,8 @@ import os
 import re
 from pathlib import Path
 
+from server.services.project_memory_service import ensure_project_memory_file
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACES_ROOT = Path(
@@ -24,6 +26,7 @@ def get_course_workspace_path(course_id: int, course_name: str) -> Path:
 def ensure_course_workspace(course_id: int, course_name: str) -> Path:
     path = get_course_workspace_path(course_id, course_name)
     path.mkdir(parents=True, exist_ok=True)
+    ensure_project_memory_file(path)
     return path
 
 

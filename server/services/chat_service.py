@@ -1,20 +1,14 @@
 import asyncio
-from datetime import datetime, timedelta
-from html import escape
 import json
 import logging
-from pathlib import Path
-import re
 import time
 from typing import Any, Dict, List, Optional
 
-import dateparser
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from server.config.config import settings
-from server.dialogue.prompts import QUERY_REWRITE_SYSTEM_PROMPT
 from server.memory.conversation_store import (
     DEFAULT_HISTORY_MAX as CHAT_HISTORY_MAX,
     infer_scope,
@@ -23,82 +17,36 @@ from server.memory.conversation_store import (
     save_conversation,
 )
 from server.memory.conversation_summary import compact_dialog
-from server.memory.memory_rules import RULES, normalize_pref_signal
 from server.infra.repo import (
     get_document_detail,
-    list_chunks_emb,
-    list_chunks_emb_multi,
     list_learning_progress,
     list_user_preferences,
     list_user_reminders,
-    upsert_learning_progress,
-    upsert_user_preference,
 )
-from server.services.embedding_service import cosine_similarity, embed_text, rank_chunks
-from server.services.model_service import remote_stream_reply, smart_model_dispatch
+from server.services.model_service import remote_stream_events, smart_model_dispatch
 from server.services.web_search_service import web_search
-
-LOG_HTML_PATH = Path("logs/error_logs.html")
-LOG_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-
-def ensure_log_html_exists() -> None:
-    if LOG_HTML_PATH.exists():
-        return
-    LOG_HTML_PATH.write_text(
-        """<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8" />
-<title>Error Log</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 24px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; }
-th { background: #f5f5f5; }
-tr:nth-child(even) { background: #fafafa; }
-</style>
-</head>
-<body>
-<h2>AI Assistant Error Log</h2>
-<table>
-<thead>
-<tr>
-<th>时间</th>
-<th>会话ID</th>
-<th>耗时(ms)</th>
-<th>错误类型</th>
-<th>错误详情</th>
-</tr>
-</thead>
-<tbody>
-</tbody>
-</table>
-</body>
-</html>
-""",
-        encoding="utf-8",
-    )
-
-
-def append_error_row(session_id: str, latency_ms: int, error_type: str, detail: str) -> None:
-    ensure_log_html_exists()
-    html_text = LOG_HTML_PATH.read_text(encoding="utf-8")
-
-    row = (
-        "<tr>"
-        f"<td>{escape(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}</td>"
-        f"<td>{escape(session_id)}</td>"
-        f"<td>{latency_ms}</td>"
-        f"<td>{escape(error_type)}</td>"
-        f"<td>{escape(detail)}</td>"
-        "</tr>"
-    )
-
-    marker = "</tbody>"
-    if marker in html_text:
-        html_text = html_text.replace(marker, row + marker, 1)
-        LOG_HTML_PATH.write_text(html_text, encoding="utf-8")
+from server.services.chat.compose import build_final_messages
+from server.services.chat.errors import append_error_row
+from server.services.chat.memory import (
+    build_memory_text,
+    extract_memory_signals,
+    get_short_term_memory,
+    persist_memory_signals,
+)
+from server.services.chat.references import (
+    build_inline_context_reference_items,
+    build_reference_items,
+    build_retrieval_context,
+    build_web_context,
+    build_web_reference_items,
+)
+from server.services.chat.retrieval import (
+    get_latest_user_query,
+    retrieve_chunks_for_chat,
+    retrieve_chunks_multi,
+    rewrite_retrieval_query,
+    should_auto_web_search,
+)
 
 
 def _payload_messages(payload: Any) -> List[Dict[str, str]]:
@@ -108,23 +56,6 @@ def _payload_messages(payload: Any) -> List[Dict[str, str]]:
         if str(getattr(m, "content", "") or "").strip()
     ]
 
-
-def _insert_system_after_primary(
-    messages: List[Dict[str, str]],
-    system_msg: Dict[str, str],
-    *,
-    marker: str | None = None,
-) -> List[Dict[str, str]]:
-    if marker and any(
-        m.get("role") == "system" and marker in str(m.get("content", ""))
-        for m in messages
-    ):
-        return messages
-
-    first_system_idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
-    if first_system_idx >= 0:
-        return messages[: first_system_idx + 1] + [system_msg] + messages[first_system_idx + 1 :]
-    return [system_msg] + messages
 
 
 def _prepare_conversation(
@@ -162,580 +93,7 @@ def _prepare_conversation(
     return merged_messages, conversation_summary
 
 
-def inject_system_prompt(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    persona = {"role": "system", "content": settings.persona_system_prompt}
-    filtered = [
-        m
-        for m in messages
-        if not (m.get("role") == "system" and m.get("content") == settings.persona_system_prompt)
-    ]
-    return [persona] + filtered
 
-
-def get_short_term_memory(
-    session_id: str,
-    merged_messages: List[Dict[str, str]],
-    rounds: int,
-) -> Dict[str, object]:
-    max_messages = max(2, rounds * 2)
-    msgs = merged_messages[-max_messages:]
-    return {
-        "session_id": session_id,
-        "window_rounds": rounds,
-        "messages": [{"role": m.get("role", ""), "content": m.get("content", "")} for m in msgs],
-    }
-
-
-def build_memory_text(
-    short_mem: Dict[str, object],
-    pref_items: List[Dict[str, object]],
-    progress_items: List[Dict[str, object]],
-    pref_top_k: int,
-    progress_top_k: int,
-) -> str:
-    lines: List[str] = []
-    if pref_items:
-        lines.append("【长期偏好】")
-        for x in pref_items[:pref_top_k]:
-            lines.append(f"-{x.get('key')}:{x.get('value')}")
-    if progress_items:
-        lines.append("【学习进度】")
-        for x in progress_items[:progress_top_k]:
-            nr = x.get("next_review_at")
-            nr_text = f" / 到期 {nr}" if nr else ""
-            lines.append(
-                f"- 课程{x.get('course_id')} / {x.get('topic')} / 状态{x.get('status')} / 掌握度{x.get('mastery')}{nr_text}"
-            )
-    if short_mem.get("messages"):
-        lines.append("【短期上下文】")
-        for m in short_mem["messages"][-4:]:
-            role = m.get("role", "")
-            content = m.get("content", "").strip().replace("\n", " ")
-            lines.append(f"- {role}: {content[:80]}")
-    return "\n".join(lines).strip()
-
-
-def extract_memory_signals(user_text: str, document_id: Optional[int]) -> tuple[list[dict], list[dict]]:
-    text_raw = (user_text or "").strip()
-    text = text_raw.lower()
-    pref_signals: list[dict] = []
-    progress_signals: list[dict] = []
-    hit_rules = 0
-
-    for rule in RULES:
-        matched = False
-        for kw in rule.get("keywords", []):
-            if kw.lower() in text:
-                matched = True
-                break
-        if not matched and rule.get("regex"):
-            m = re.search(rule["regex"], text, re.I)
-            if m:
-                matched = True
-        if not matched:
-            continue
-
-        hit_rules += 1
-        if rule["type"] == "preference":
-            val = rule.get("value")
-            if rule.get("regex"):
-                m = re.search(rule["regex"], text_raw, re.I)
-                if m:
-                    g = m.group(1) if m.groups() else m.group(0)
-                    if rule.get("map"):
-                        val = rule["map"].get(g, g)
-                    else:
-                        val = g
-            raw_signal = {
-                "key": rule["key"],
-                "value": val,
-                "source": "rule:",
-                "confidence": rule.get("confidence", 0.5),
-                "rule_id": rule.get("id"),
-            }
-            pref_signals.append(normalize_pref_signal(raw_signal))
-        elif rule["type"] == "progress":
-            next_review = None
-            try:
-                m = re.search(
-                    r"(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?)|(\d{1,2}月\d{1,2}日)|(\d{1,2}[/-]\d{1,2})",
-                    text_raw,
-                )
-                date_candidate = m.group(0) if m else None
-                if date_candidate:
-                    dt = dateparser.parse(
-                        date_candidate,
-                        languages=["zh"],
-                        settings={"PREFER_DATES_FROM": "future"},
-                    )
-                    if dt is None:
-                        if re.match(r"^\d{1,2}[/-]\d{1,2}$", date_candidate):
-                            parts = re.split(r"[/-]", date_candidate)
-                            cand = f"{int(parts[0])}月{int(parts[1])}日"
-                        else:
-                            cand = date_candidate
-                        year = datetime.utcnow().year
-                        cand_with_year = f"{year}年{cand}"
-                        dt = dateparser.parse(
-                            cand_with_year,
-                            languages=["zh"],
-                            settings={"PREFER_DATES_FROM": "future"},
-                        )
-                else:
-                    dt = dateparser.parse(
-                        text_raw,
-                        languages=["zh"],
-                        settings={"PREFER_DATES_FROM": "future"},
-                    )
-                if dt:
-                    next_review = dt.isoformat()
-            except Exception:
-                next_review = None
-
-            progress_signals.append(
-                {
-                    "course_id": document_id or 0,
-                    "topic": rule.get("topic"),
-                    "status": rule.get("status"),
-                    "mastery": rule.get("mastery"),
-                    "evidence": text[:120],
-                    "rule_id": rule.get("id"),
-                    "next_review_at": next_review,
-                }
-            )
-
-    logging.info(
-        {
-            "memory_rule_hits": hit_rules,
-            "pref_signals": len(pref_signals),
-            "progress_signals": len(progress_signals),
-        }
-    )
-    return pref_signals, progress_signals
-
-
-def persist_memory_signals(
-    user_id: str,
-    pref_signals: list[dict],
-    progress_signals: list[dict],
-) -> None:
-    now = datetime.utcnow()
-    short_write_window = timedelta(minutes=1)
-    throttle_window = timedelta(hours=1)
-    pref_hit = len(pref_signals)
-    prog_hit = len(progress_signals)
-
-    pref_written = 0
-    pref_skipped = 0
-    pref_failed = 0
-
-    prog_written = 0
-    prog_skipped = 0
-    prog_failed = 0
-
-    try:
-        existing_prefs = list_user_preferences(user_id=user_id, limit=500)
-    except Exception as exc:
-        logging.warning(f"list_user_preferences failed: {exc}")
-        existing_prefs = []
-
-    def parse_time(t):
-        if not t:
-            return None
-        if isinstance(t, datetime):
-            return t
-        try:
-            return datetime.fromisoformat(str(t))
-        except Exception:
-            try:
-                return datetime.strptime(str(t), "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                return None
-
-    for s in pref_signals:
-        try:
-            key = str(s["key"])
-            value = str(s["value"])
-            source = str(s.get("source", "rule"))
-            confidence = float(s.get("confidence")) if s.get("confidence") is not None else None
-            recently_same = False
-            for p in existing_prefs:
-                if p.get("key") == key:
-                    recently_same = p
-                    break
-
-            if recently_same:
-                t = parse_time(recently_same.get("updated_at") or recently_same.get("last_seen"))
-                if t and (now - t) <= short_write_window:
-                    pref_skipped += 1
-                    continue
-
-            ok = upsert_user_preference(
-                user_id=user_id,
-                key=key,
-                value=value,
-                source=source,
-                confidence=confidence,
-            )
-            if ok:
-                pref_written += 1
-            else:
-                pref_failed += 1
-        except Exception as exc:
-            pref_failed += 1
-            logging.warning(f"persist user preference failed: {exc}")
-
-    try:
-        existing_progress = list_learning_progress(user_id=user_id, limit=200)
-    except Exception as exc:
-        logging.warning(f"list_learning_progress failed: {exc}")
-        existing_progress = []
-
-    for s in progress_signals:
-        try:
-            course_id = s.get("course_id")
-            topic = str(s.get("topic", ""))
-            status = str(s.get("status", ""))
-            mastery = float(s.get("mastery")) if s.get("mastery") is not None else None
-            evidence = str(s.get("evidence", ""))
-            recently_same = False
-            for p in existing_progress:
-                if p.get("topic") == topic and (course_id is None or p.get("course_id") == course_id):
-                    t = parse_time(p.get("last_review_at") or p.get("next_review_at"))
-                    if t and (now - t) <= throttle_window:
-                        recently_same = True
-                        break
-            if recently_same:
-                prog_skipped += 1
-                continue
-
-            next_review_at = s.get("next_review_at")
-            ok = upsert_learning_progress(
-                user_id=user_id,
-                course_id=course_id,
-                topic=topic,
-                status=status,
-                mastery=mastery,
-                evidence=evidence,
-                next_review_at=next_review_at,
-            )
-            if ok:
-                prog_written += 1
-            else:
-                prog_failed += 1
-        except Exception as exc:
-            prog_failed += 1
-            logging.warning(f"persist learning progress failed: {exc}")
-
-    logging.info(
-        {
-            "user_id": user_id,
-            "pref_rule_hits": pref_hit,
-            "pref_written": pref_written,
-            "pref_skipped": pref_skipped,
-            "pref_failed": pref_failed,
-            "progress_rule_hits": prog_hit,
-            "progress_written": prog_written,
-            "progress_skipped": prog_skipped,
-            "progress_failed": prog_failed,
-        }
-    )
-
-
-def select_relevant_memory(memory_text: str, query: str | None, top_k: int = 6) -> str:
-    if not memory_text:
-        return ""
-    lines = [ln.strip() for ln in memory_text.splitlines() if ln.strip()]
-    if not lines:
-        return ""
-    if not query:
-        return "\n".join(lines[:top_k])
-
-    try:
-        q_vec = embed_text(str(query))
-        scored = []
-        for ln in lines:
-            try:
-                ln_vec = embed_text(ln)
-                score = cosine_similarity(q_vec, ln_vec)
-            except Exception:
-                score = -1.0
-            scored.append((score, ln))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        selected = [ln for sc, ln in scored[:top_k] if sc is not None]
-        if all((sc <= 0 for sc, _ in scored)):
-            raise RuntimeError("embedding scores non-positive, fallback")
-        return "\n".join(selected)
-    except Exception:
-        q_low = str(query).lower()
-        q_words = set(re.findall(r"[\w\u4e00-\u9fff]+", q_low))
-        scored = []
-        for ln in lines:
-            ln_low = ln.lower()
-            ln_words = set(re.findall(r"[\w\u4e00-\u9fff]+", ln_low))
-            overlap = len(q_words & ln_words)
-            scored.append((overlap, ln))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        selected = [ln for sc, ln in scored if sc > 0][:top_k]
-        if not selected:
-            return "\n".join(lines[:top_k])
-        return "\n".join(selected)
-
-
-def inject_memory_as_system(
-    messages: List[Dict[str, str]],
-    memory_text: str,
-    query: str | None = None,
-    top_k: int | None = None,
-) -> List[Dict[str, str]]:
-    text = (memory_text or "").strip()
-    if not text:
-        return messages
-    if top_k is None:
-        top_k = getattr(settings, "long_memory_top_k", 5)
-
-    selected = select_relevant_memory(text, query=query, top_k=top_k)
-    if not selected:
-        return messages
-
-    memory_msg = {
-        "role": "system",
-        "content": (
-            "【用户记忆（仅作个性化参考）】\n"
-            "以下为与当前问题最相关的记忆片段；请仅在直接相关的问题中使用，"
-            "并勿将其作为新知识去扩展或推断。\n\n"
-            f"{selected}\n\n"
-            "若信息不足，请写“资料中未找到”或明确告知不确定性。"
-        ),
-    }
-    marker = "【用户记忆（仅作个性化参考）】"
-    return _insert_system_after_primary(messages, memory_msg, marker=marker)
-
-
-def inject_summary_as_system(
-    messages: List[Dict[str, str]],
-    summary: str,
-) -> List[Dict[str, str]]:
-    text = (summary or "").strip()
-    if not text:
-        return messages
-    marker = "Conversation summary"
-    if any(m.get("role") == "system" and marker in m.get("content", "") for m in messages):
-        return messages
-    summary_msg = {
-        "role": "system",
-        "content": (
-            "Conversation summary (older turns only; the latest user message and "
-            "recent dialogue override this if there is any conflict):\n"
-            f"{text}"
-        ),
-    }
-    return _insert_system_after_primary(messages, summary_msg, marker=marker)
-
-
-def get_latest_user_query(messages: List[Dict[str, str]]) -> str:
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            return str(msg.get("content", "")).strip()
-    return ""
-
-
-def rewrite_retrieval_query(raw_query: str, messages: List[Dict[str, str]]) -> str:
-    query = str(raw_query or "").strip()
-    if not query:
-        return ""
-    recent = [
-        {
-            "role": str(m.get("role", "")),
-            "content": str(m.get("content", "")).strip()[:500],
-        }
-        for m in messages[-6:]
-        if str(m.get("role", "")) in {"user", "assistant"} and str(m.get("content", "")).strip()
-    ]
-    if len(query) < 12 and len(recent) <= 1:
-        return query
-
-    try:
-        result = smart_model_dispatch(
-            {
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": QUERY_REWRITE_SYSTEM_PROMPT,
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"最近对话：\n{json.dumps(recent, ensure_ascii=False)}\n\n"
-                            f"用户原始输入：{query}\n\n"
-                            "改写查询："
-                        ),
-                    },
-                ],
-                "model": settings.remote_fast_model,
-                "generation": {
-                    "max_tokens": 120,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                },
-            }
-        )
-        rewritten = str(result.get("reply", "")).strip()
-        rewritten = re.sub(r"^改写查询[:：]\s*", "", rewritten).strip().strip('"')
-        if rewritten and len(rewritten) <= 240:
-            return rewritten
-    except Exception as exc:
-        logging.warning("rewrite retrieval query failed: %s", exc)
-    return query
-
-
-def retrieve_chunks_for_chat(
-    query: str,
-    document_id: Optional[int] = None,
-    top_k: int = 3,
-    candidate_limit: int = 500,
-) -> List[Dict[str, object]]:
-    q = query.strip()
-    if not q:
-        return []
-
-    query_vec = embed_text(q)
-    candidates = list_chunks_emb(document_id=document_id, limit=candidate_limit)
-    if not candidates:
-        return []
-    ranked = rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
-    return ranked
-
-
-def _brief_text(text: str, max_len: int = 80) -> str:
-    t = (text or "").strip().replace("\n", " ")
-    if len(t) <= max_len:
-        return t
-    return t[:max_len] + "..."
-
-
-def build_reference_items(chunks: List[Dict[str, object]], max_items: int = 8) -> List[Dict[str, object]]:
-    refs: List[Dict[str, object]] = []
-    for i, c in enumerate(chunks[:max_items], start=1):
-        score_val = c.get("score")
-        source_path = str(c.get("source_path", "") or "")
-        refs.append(
-            {
-                "ref_id": f"参考{i}",
-                "page_no": c.get("page_no"),
-                "summary": _brief_text(c.get("content", ""), max_len=100),
-                "doucument_title": c.get("document_title", "未知文档"),
-                "score": float(score_val) if isinstance(score_val, (int, float)) else None,
-                "source_path": source_path or None,
-            }
-        )
-    return refs
-
-
-def build_retrieval_context(chunks: List[Dict[str, object]]) -> str:
-    if not chunks:
-        return ""
-    lines = [
-        "以下是可参考的资料片段，请优先依据这些内容回答；",
-        "如果资料不足，请明确说“资料中未找到”。",
-        "",
-    ]
-    for i, c in enumerate(chunks, start=1):
-        title = str(c.get("document_title", "未知文档"))
-        source_path = str(c.get("source_path", "") or "").strip()
-        page_no = c.get("page_no")
-        page_text = f"第{page_no}页" if page_no is not None else "未知页码"
-        content = str(c.get("content", "")).strip()
-        score = c.get("score")
-        score_text = f"{float(score):.4f}" if isinstance(score, (int, float)) else "N/A"
-
-        lines.append(f"[参考{i}] 来源：{title} | {page_text} | 相似度：{score_text}")
-        if source_path:
-            lines.append(f"路径：{source_path}")
-        lines.append(content)
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
-def add_recall_ctx(messages: List[Dict[str, str]], context_text: str) -> List[Dict[str, str]]:
-    text = context_text.strip()
-    if not text:
-        return messages
-    retrieval_msg = {
-        "role": "system",
-        "content": (
-            "以下是检索到的学习资料片段，供你参考：\n\n"
-            f"{text}\n\n"
-            "使用说明：\n"
-            "1. 如果用户的问题与资料相关，请优先基于资料内容回答，可注明出处。\n"
-            "2. 如果用户的问题与资料无关（例如闲聊、讲笑话、通用知识等），请直接用你自己的知识正常回答，不要拒绝。\n"
-            "3. 如果资料里没有某个知识点，可以说资料中未提到，然后用自己的知识回答。\n"
-            "4. 不要因为资料里没有提到而拒绝回答用户的任何问题。"
-        ),
-    }
-    return _insert_system_after_primary(messages, retrieval_msg, marker="以下是检索到的学习资料片段")
-
-
-def retrieve_chunks_multi(
-    query: str,
-    document_ids: List[int],
-    top_k: int = 5,
-    candidate_limit: int = 1000,
-) -> List[Dict[str, object]]:
-    if not document_ids or not query.strip():
-        return []
-    query_vec = embed_text(query.strip())
-    candidates = list_chunks_emb_multi(document_ids=document_ids, limit=candidate_limit)
-    if not candidates:
-        return []
-    return rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
-
-
-def build_web_context(results: List[Dict[str, object]]) -> str:
-    if not results:
-        return ""
-    lines = ["【联网搜索结果】以下为实时搜索到的参考信息：", ""]
-    for i, r in enumerate(results, 1):
-        lines.append(f"[网络{i}] {r.get('title', '')}")
-        lines.append(f"来源：{r.get('url', '')}")
-        lines.append(r.get("snippet", "").strip())
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
-def add_web_ctx(messages: List[Dict[str, str]], web_context: str) -> List[Dict[str, str]]:
-    if not web_context.strip():
-        return messages
-    web_msg = {
-        "role": "system",
-        "content": (
-            "以下是联网搜索到的最新信息，供你参考。"
-            "请结合资料和搜索结果回答，并在必要时注明信息来源。\n\n"
-            f"{web_context}"
-        ),
-    }
-    marker = "【联网搜索结果】"
-    return _insert_system_after_primary(messages, web_msg, marker=marker)
-
-
-def build_final_messages(
-    merged_messages: List[Dict[str, str]],
-    *,
-    conversation_summary: str = "",
-    memory_text: str = "",
-    query: str | None = None,
-    recall_ctx: str = "",
-    web_context: str = "",
-) -> List[Dict[str, str]]:
-    final_messages = inject_system_prompt(merged_messages)
-    final_messages = inject_summary_as_system(final_messages, conversation_summary)
-    if settings.memory_enabled:
-        final_messages = inject_memory_as_system(final_messages, memory_text, query=query)
-    if recall_ctx:
-        final_messages = add_recall_ctx(final_messages, recall_ctx)
-    if web_context:
-        final_messages = add_web_ctx(final_messages, web_context)
-    return final_messages
 
 
 def _build_input_data(payload: Any, final_messages: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -826,7 +184,12 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         )
         query = get_latest_user_query(merged_messages)
         retrieval_query = query
-        if payload.use_retrieval or payload.use_web_search:
+        effective_use_retrieval = bool(payload.use_retrieval or payload.document_ids or payload.document_id)
+        effective_use_web_search = bool(payload.use_web_search or should_auto_web_search(query))
+        web_results: List[Dict[str, object]] = []
+        command_context = ""
+
+        if effective_use_retrieval or effective_use_web_search:
             retrieval_query = await run_in_threadpool(
                 rewrite_retrieval_query,
                 query,
@@ -851,7 +214,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             progress_signals=progress_signals,
         )
 
-        if payload.use_retrieval:
+        if effective_use_retrieval:
             eff_doc_ids = (
                 list(payload.document_ids)
                 if payload.document_ids
@@ -876,7 +239,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             recall_ctx = build_retrieval_context(retrieved_chunks)
 
         web_context = ""
-        if payload.use_web_search:
+        if effective_use_web_search:
             try:
                 web_results = web_search(retrieval_query, top_k=5)
                 web_context = build_web_context(web_results)
@@ -890,6 +253,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             query=query,
             recall_ctx=recall_ctx,
             web_context=web_context,
+            command_context=command_context,
         )
 
         input_data = _build_input_data(payload, final_messages)
@@ -899,11 +263,29 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
         logging.info(
             f"chat of session={session_id} model={settings.remote_primary_model} latency={latency_ms}ms"
         )
-        references = build_reference_items(retrieved_chunks) if payload.use_retrieval else []
+        references = build_reference_items(retrieved_chunks) if effective_use_retrieval else []
+        references.extend(
+            build_web_reference_items(
+                web_results,
+                start_index=len(references) + 1,
+                max_items=max(0, 8 - len(references)),
+            )
+        )
+        references.extend(
+            build_inline_context_reference_items(
+                query,
+                start_index=len(references) + 1,
+                max_items=max(0, 8 - len(references)),
+            )
+        )
         merged_messages.append({
             "role": "assistant",
             "content": result["reply"],
             "refs": references,
+            "metadata": {
+                "usage": result.get("usage") or {},
+                "model": result.get("model") or settings.remote_primary_model,
+            },
         })
         await run_in_threadpool(
             save_conversation,
@@ -918,6 +300,8 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             "reply": str(result.get("reply", "")),
             "latency_ms": int(result.get("latency_ms", 0)),
             "reference": references,
+            "usage": result.get("usage") or {},
+            "model": result.get("model") or settings.remote_primary_model,
         }
     except Exception as exc:
         msg = str(exc)
@@ -969,24 +353,110 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
     except Exception as exc:
         logging.warning(f"chat_stream memory inject failed: {exc}")
 
-    final_messages = build_final_messages(
-        merged_messages,
-        conversation_summary=conversation_summary,
-        memory_text=memory_text,
-        query=query,
-    )
+    def status_event(label: str, detail: str = "", kind: str = "activity") -> str:
+        return f"data: {json.dumps({'status': {'label': label, 'detail': detail, 'kind': kind}}, ensure_ascii=False)}\n\n"
 
     def event_gen():
         try:
+            yield status_event("正在判断是否需要检索或联网", kind="plan")
+            recall_ctx = ""
+            web_context = ""
+            command_context = ""
+            retrieved_chunks: List[Dict[str, object]] = []
+            web_results: List[Dict[str, object]] = []
+            retrieval_query = query
+            effective_use_retrieval = bool(payload.use_retrieval or payload.document_ids or payload.document_id)
+            effective_use_web_search = bool(payload.use_web_search or should_auto_web_search(query))
+
+            if effective_use_retrieval or effective_use_web_search:
+                try:
+                    yield status_event("正在改写检索查询", kind="search")
+                    retrieval_query = rewrite_retrieval_query(query, merged_messages)
+                except Exception as exc:
+                    logging.warning(f"chat_stream query rewrite failed: {exc}")
+
+            if effective_use_retrieval:
+                try:
+                    yield status_event("正在查找本地资料", retrieval_query, kind="retrieval")
+                    eff_doc_ids = (
+                        list(payload.document_ids)
+                        if payload.document_ids
+                        else ([payload.document_id] if payload.document_id else [])
+                    )
+                    if eff_doc_ids:
+                        retrieved_chunks = retrieve_chunks_multi(
+                            query=retrieval_query,
+                            document_ids=eff_doc_ids,
+                            top_k=20,
+                            candidate_limit=2000,
+                        )
+                    else:
+                        retrieved_chunks = retrieve_chunks_for_chat(
+                            query=retrieval_query,
+                            document_id=payload.document_id,
+                            top_k=20,
+                            candidate_limit=2000,
+                        )
+                    recall_ctx = build_retrieval_context(retrieved_chunks)
+                    yield status_event(f"找到 {len(retrieved_chunks)} 条本地资料片段", kind="retrieval")
+                except Exception as exc:
+                    logging.warning(f"chat_stream retrieval failed: {exc}")
+                    retrieved_chunks = []
+                    recall_ctx = ""
+
+            if effective_use_web_search:
+                try:
+                    yield status_event("正在查找网上资料", retrieval_query, kind="web")
+                    web_results = web_search(retrieval_query, top_k=5)
+                    web_context = build_web_context(web_results)
+                    yield status_event(f"找到 {len(web_results)} 条网页结果", kind="web")
+                except Exception as exc:
+                    logging.warning(f"chat_stream web search failed: {exc}")
+                    web_context = ""
+                    web_results = []
+
+            references = build_reference_items(retrieved_chunks) if effective_use_retrieval else []
+            references.extend(
+                build_web_reference_items(
+                    web_results,
+                    start_index=len(references) + 1,
+                    max_items=max(0, 8 - len(references)),
+                )
+            )
+            references.extend(
+                build_inline_context_reference_items(
+                    query,
+                    start_index=len(references) + 1,
+                    max_items=max(0, 8 - len(references)),
+                )
+            )
+            final_messages = build_final_messages(
+                merged_messages,
+                conversation_summary=conversation_summary,
+                memory_text=memory_text,
+                query=query,
+                recall_ctx=recall_ctx,
+                web_context=web_context,
+                command_context=command_context,
+            )
+            yield status_event("正在生成回答", kind="model")
+
             if payload.image_url or payload.audio_url or payload.files:
                 input_data = _build_input_data(payload, final_messages)
                 result = smart_model_dispatch(input_data)
                 reply = str(result.get("reply", "")).strip()
+                usage = dict(result.get("usage") or {})
+                model = str(result.get("model") or settings.remote_primary_model)
                 if reply:
                     yield f"data: {json.dumps({'delta': reply}, ensure_ascii=False)}\n\n"
                 latency_ms = int((time.time() - start) * 1000)
-                yield f"data: {json.dumps({'done': True, 'reply': reply, 'latency_ms': latency_ms}, ensure_ascii=False)}\n\n"
-                merged_messages.append({"role": "assistant", "content": reply})
+                yield f"data: {json.dumps({'done': True, 'reply': reply, 'latency_ms': latency_ms, 'reference': references, 'usage': usage, 'model': model}, ensure_ascii=False)}\n\n"
+                merged_messages.append({
+                    "role": "assistant",
+                    "content": reply,
+                    "refs": references,
+                    "metadata": {"usage": usage, "model": model},
+                })
                 save_conversation(
                     user_id,
                     session_id,
@@ -997,23 +467,45 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
                 )
                 return
 
+            stream_generation = {
+                "max_tokens": max(settings.max_new_tokens, 1600),
+                "temperature": settings.temperature,
+                "top_p": settings.top_p,
+            }
             reply_chunks: List[str] = []
+            usage: Dict[str, object] = {}
             try:
-                for delta in remote_stream_reply(final_messages):
-                    reply_chunks.append(delta)
-                    yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+                for event in remote_stream_events(final_messages, generation=stream_generation):
+                    if event.get("type") == "usage":
+                        usage = dict(event.get("usage") or {})
+                        yield f"data: {json.dumps({'usage': usage}, ensure_ascii=False)}\n\n"
+                        continue
+                    raw_delta = event.get("delta", "")
+                    if raw_delta is None:
+                        continue
+                    delta = str(raw_delta)
+                    if delta:
+                        reply_chunks.append(delta)
+                        yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
             except Exception as stream_exc:
                 logging.warning(f"chat stream upstream failed, fallback to non-stream: {stream_exc}")
-                fallback_result = smart_model_dispatch({"messages": final_messages})
+                fallback_result = smart_model_dispatch({"messages": final_messages, "generation": stream_generation})
                 fallback_reply = str(fallback_result.get("reply", "")).strip()
                 if not fallback_reply:
                     raise stream_exc
                 reply_chunks = [fallback_reply]
+                usage = dict(fallback_result.get("usage") or {})
                 yield f"data: {json.dumps({'delta': fallback_reply}, ensure_ascii=False)}\n\n"
 
             reply = "".join(reply_chunks).strip()
             latency_ms = int((time.time() - start) * 1000)
-            merged_messages.append({"role": "assistant", "content": reply})
+            model = settings.remote_primary_model
+            merged_messages.append({
+                "role": "assistant",
+                "content": reply,
+                "refs": references,
+                "metadata": {"usage": usage, "model": model},
+            })
             save_conversation(
                 user_id,
                 session_id,
@@ -1022,7 +514,7 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
                 limit=CHAT_HISTORY_MAX,
                 compressed_summary=conversation_summary,
             )
-            yield f"data: {json.dumps({'done': True, 'reply': reply, 'latency_ms': latency_ms}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True, 'reply': reply, 'latency_ms': latency_ms, 'usage': usage, 'reference': references, 'model': model}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             msg = str(exc)
             latency_ms = int((time.time() - start) * 1000)
