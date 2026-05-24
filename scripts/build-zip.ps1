@@ -214,11 +214,20 @@ if (-not (Test-Path -LiteralPath $AppExe)) {
 
 $env:HOST = "127.0.0.1"
 $env:PORT = "8000"
+$env:BACKEND_URL = $BackendUrl
 $env:PROVIDER_CONFIG_PATH = Join-Path $RootDir "data\runtime\provider_config.json"
 
 $backend = $null
 if (Test-Path -LiteralPath $BackendExe) {
-  $backend = Start-Process -FilePath $BackendExe -WorkingDirectory $RootDir -PassThru -WindowStyle Hidden
+  $LogDir = Join-Path $RootDir "logs"
+  New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+  $backend = Start-Process `
+    -FilePath $BackendExe `
+    -WorkingDirectory $RootDir `
+    -PassThru `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $LogDir "backend.out.log") `
+    -RedirectStandardError (Join-Path $LogDir "backend.err.log")
   $deadline = (Get-Date).AddSeconds(25)
   do {
     try {
