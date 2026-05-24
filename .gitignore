@@ -19,6 +19,8 @@ client/coverage/
 coverage/
 
 # Runtime and generated files
+build/
+release/
 logs/
 *.log
 *.tmp
