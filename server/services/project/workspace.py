@@ -2,7 +2,7 @@ import os
 import re
 from pathlib import Path
 
-from server.services.project_memory_service import ensure_project_memory_file
+from server.services.project.memory import ensure_project_memory_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

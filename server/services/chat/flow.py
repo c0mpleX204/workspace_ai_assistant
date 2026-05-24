@@ -23,8 +23,8 @@ from server.infra.repo import (
     list_user_preferences,
     list_user_reminders,
 )
-from server.services.model_service import remote_stream_events, smart_model_dispatch
-from server.services.web_search_service import web_search
+from server.services.ai.model import remote_stream_events, smart_model_dispatch
+from server.services.search.web import web_search
 from server.services.chat.compose import build_final_messages
 from server.services.chat.errors import append_error_row
 from server.services.chat.memory import (

@@ -25,8 +25,8 @@ from server.api.schemas import (
     WorkspaceFileSaveResponse,
     WorkspaceTreeResponse,
 )
-from server.services.project_workspace_service import ensure_course_workspace
-from server.services.project_memory_service import PROJECT_MEMORY_FILENAME
+from server.services.project.workspace import ensure_course_workspace
+from server.services.project.memory import PROJECT_MEMORY_FILENAME
 
 router = APIRouter(tags=["courses"])
 

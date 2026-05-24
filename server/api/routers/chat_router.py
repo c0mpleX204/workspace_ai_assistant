@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from server.api.schemas import ChatRequest, ChatResponse, ChatSessionResponse
 from server.memory.conversation_store import infer_scope, load_conversation
-from server.services.chat_service import create_chat_stream, handle_chat
+from server.services.chat.flow import create_chat_stream, handle_chat
 
 router = APIRouter(tags=["chat"])
 

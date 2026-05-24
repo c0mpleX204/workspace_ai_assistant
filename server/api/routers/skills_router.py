@@ -1,5 +1,5 @@
 from server.api.schemas import SkillItem, SkillListResponse
-from server.services.skill_registry import list_installed_skills
+from server.services.skills.registry import list_installed_skills
 
 from fastapi import APIRouter
 

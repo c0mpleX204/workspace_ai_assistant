@@ -8,7 +8,7 @@ from fastapi.responses import Response as FastAPIResponse
 
 from server.api.schemas import TTSRequest
 from server.speech.realtime_vad import MIN_PCM_BYTES, PCM_SAMPLE_RATE, RealtimePcmVadSession
-from server.services.speech_service import detect_audio_media_type, speech_to_text, text_to_speech
+from server.services.ai.speech import detect_audio_media_type, speech_to_text, text_to_speech
 
 router = APIRouter(tags=["speech"])
 

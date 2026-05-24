@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from server.config.config import settings
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.model import smart_model_dispatch
 
 
 PROJECT_MEMORY_FILENAME = ".project-memory.md"

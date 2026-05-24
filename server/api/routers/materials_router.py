@@ -26,8 +26,8 @@ from server.api.schemas import (
     SearchRequest,
     SearchResponse,
 )
-from server.services.embedding_service import embed_document_chunks, embed_text, rank_chunks
-from server.services.project_workspace_service import ensure_course_workspace, unique_child_path
+from server.services.ai.embedding import embed_document_chunks, embed_text, rank_chunks
+from server.services.project.workspace import ensure_course_workspace, unique_child_path
 
 router = APIRouter(tags=["materials"])
 

@@ -3,7 +3,7 @@ import logging
 import threading
 
 from server.infra.repo import list_due_reminders, mark_reminder_sent
-from server.services.model_service import warmup_model
+from server.services.ai.model import warmup_model
 
 
 _STOP = threading.Event()

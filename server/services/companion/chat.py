@@ -41,8 +41,8 @@ from server.orchestration.companion_routing import (
     MODE_TASK,
     MODE_FORCE_TASK,
 )
-from server.services.companion_action_service import EXPRESSIONS, validate_intent
-from server.services.companion_task_service import (
+from server.services.companion.action import EXPRESSIONS, validate_intent
+from server.services.companion.task import (
     HEAVY_ASYNC,
     HEAVY_MODEL,
     task_result_prompt,
@@ -50,7 +50,7 @@ from server.services.companion_task_service import (
     run_heavy_task,
     start_task,
 )
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.model import smart_model_dispatch
 
 
 LIGHT_MODE = os.getenv("COMPANION_LIGHTWEIGHT_ENABLED", "true").lower() == "true"

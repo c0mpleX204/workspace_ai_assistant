@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Dict
 
 from server.config.config import settings
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.model import smart_model_dispatch
 
 
 FAST_MODEL = os.getenv("COMPANION_FAST_MODEL", settings.remote_fast_model).strip()

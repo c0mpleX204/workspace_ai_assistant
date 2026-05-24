@@ -8,7 +8,7 @@ from server.agent_core.tool_registry import (
 )
 from server.api.schemas import ProviderConfigUpdateRequest
 from server.config.config import get_provider_config_public, save_provider_config, settings
-from server.services.model_service import warmup_model
+from server.services.ai.model import warmup_model
 
 router = APIRouter(tags=["health"])
 

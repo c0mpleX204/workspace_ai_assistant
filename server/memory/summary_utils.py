@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Tuple
 
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.model import smart_model_dispatch
 
 
 def plain_dialog(messages: List[Dict[str, str]]) -> str:

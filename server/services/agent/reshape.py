@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from server.config.config import settings
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.model import smart_model_dispatch
 
 AGENT_RESHAPE_SYSTEM_PROMPT = """
 你是一个本地 IDE agent 的任务拆解器。你的任务不是回答用户，而是把用户输入 reshape 成 runtime 可执行的 JSON。

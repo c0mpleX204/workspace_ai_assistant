@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from server.api.schemas import AgentRunRequest, AgentRunStateResponse
-from server.services.agent_run_service import create_agent_run_stream, load_agent_run
+from server.services.agent.run import create_agent_run_stream, load_agent_run
 
 
 router = APIRouter(tags=["agent-runs"])

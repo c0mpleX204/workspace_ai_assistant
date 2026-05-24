@@ -1,7 +1,7 @@
 from typing import Dict, Tuple
 
 from server.api.schemas import CompanionActionIntent
-from server.services.game_control_service import execute_game_control
+from server.services.integrations.game import execute_game_control
 
 
 ACTION_TYPES = {

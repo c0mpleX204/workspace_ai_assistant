@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from server.config.config import settings
 from server.orchestration.companion_routing import FAST_MODEL
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.model import smart_model_dispatch
 
 
 HEAVY_MODEL = os.getenv("COMPANION_HEAVY_MODEL", settings.remote_heavy_model).strip()

@@ -8,8 +8,8 @@ from typing import Dict, List, Optional
 from server.config.config import settings
 from server.dialogue.prompts import QUERY_REWRITE_SYSTEM_PROMPT
 from server.infra.repo import list_chunks_emb, list_chunks_emb_multi
-from server.services.embedding_service import embed_text, rank_chunks
-from server.services.model_service import smart_model_dispatch
+from server.services.ai.embedding import embed_text, rank_chunks
+from server.services.ai.model import smart_model_dispatch
 
 def get_latest_user_query(messages: List[Dict[str, str]]) -> str:
     for msg in reversed(messages):

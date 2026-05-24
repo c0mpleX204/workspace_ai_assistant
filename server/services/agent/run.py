@@ -15,7 +15,7 @@ from server.memory.conversation_store import (
     load_conversation,
     save_conversation,
 )
-from server.services.agent_command_service import (
+from server.services.agent.command import (
     build_command_context,
     resolve_command_cwd,
     run_agent_command,
@@ -31,7 +31,7 @@ from server.services.agent.plan import (
 )
 from server.services.agent.reshape import _normalize_planner, reshape_agent_request
 from server.services.agent.state import _now_iso, _save_run, load_agent_run
-from server.services.chat_service import (
+from server.services.chat.flow import (
     _prepare_conversation,
     build_final_messages,
     build_inline_context_reference_items,
@@ -44,9 +44,9 @@ from server.services.chat_service import (
     retrieve_chunks_multi,
     rewrite_retrieval_query,
 )
-from server.services.model_service import remote_stream_events, smart_model_dispatch
-from server.services.project_memory_service import load_project_memory, schedule_project_memory_update
-from server.services.web_search_service import web_search
+from server.services.ai.model import remote_stream_events, smart_model_dispatch
+from server.services.project.memory import load_project_memory, schedule_project_memory_update
+from server.services.search.web import web_search
 
 
 def create_agent_run_stream(payload: Any) -> StreamingResponse:

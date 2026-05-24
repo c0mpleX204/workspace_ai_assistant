@@ -16,7 +16,7 @@ from server.infra.repo import (
 )
 from server.memory.memory_rules import RULES, normalize_pref_signal
 from server.services.chat.messages import _insert_system_after_primary
-from server.services.embedding_service import cosine_similarity, embed_text
+from server.services.ai.embedding import cosine_similarity, embed_text
 
 def get_short_term_memory(
     session_id: str,

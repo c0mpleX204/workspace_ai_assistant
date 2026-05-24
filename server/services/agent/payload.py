@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from server.services.chat_service import _payload_messages
+from server.services.chat.flow import _payload_messages
 
 
 def _payload_to_messages(payload: Any) -> List[Dict[str, Any]]:

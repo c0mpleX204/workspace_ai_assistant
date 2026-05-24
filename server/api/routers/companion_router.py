@@ -12,12 +12,12 @@ from server.api.schemas import (
     CompanionTaskPollRequest,
     TaskPollResponse,
 )
-from server.services.companion_action_service import dispatch_intent, validate_intent
-from server.services.companion_chat_service import (
+from server.services.companion.action import dispatch_intent, validate_intent
+from server.services.companion.chat import (
     build_chat_response,
     build_memory_debug,
 )
-from server.services.companion_task_service import cancel_task, poll_task
+from server.services.companion.task import cancel_task, poll_task
 
 
 router = APIRouter(tags=["companion"])
