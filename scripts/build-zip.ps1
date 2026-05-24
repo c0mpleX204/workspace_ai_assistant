@@ -122,7 +122,7 @@ if (-not $SkipBackendBuild) {
   New-CleanDirectory $PyInstallerWorkDir
   New-CleanDirectory $PyInstallerSpecDir
 
-  $DataSeparator = if ($IsWindows -or $env:OS -eq "Windows_NT") { ";" } else { ":" }
+  $DataSeparator = if ($env:OS -eq "Windows_NT") { ";" } else { ":" }
   $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
@@ -141,10 +141,10 @@ if (-not $SkipBackendBuild) {
     "--hidden-import=uvicorn.lifespan.on"
   )
   if (Test-Path -LiteralPath (Join-Path $RootDir "server")) {
-    $PyInstallerArgs += @("--add-data", "server$DataSeparator`server")
+    $PyInstallerArgs += @("--add-data", "server${DataSeparator}server")
   }
   if (Test-Path -LiteralPath (Join-Path $RootDir "skills")) {
-    $PyInstallerArgs += @("--add-data", "skills$DataSeparator`skills")
+    $PyInstallerArgs += @("--add-data", "skills${DataSeparator}skills")
   }
   $PyInstallerArgs += @("server.py")
 
@@ -186,7 +186,7 @@ New-CleanDirectory $StageDir
 $AppDir = Join-Path $StageDir "app"
 $PortableBackendDir = Join-Path $StageDir "backend"
 New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $UnpackedDir.FullName "*") -Destination $AppDir -Recurse -Force
+Copy-Item -Path (Join-Path $UnpackedDir.FullName "*") -Destination $AppDir -Recurse -Force
 
 if (-not $SkipBackendBuild) {
   $BuiltBackendDir = Join-Path $BackendOutDir "workspace-backend"
