@@ -58,9 +58,9 @@ def api_update_provider_settings(payload: ProviderConfigUpdateRequest) -> Dict[s
     provider = save_provider_config(
         api_base_url=payload.api_base_url,
         api_key=payload.api_key,
+        companion_persona_prompt=payload.companion_persona_prompt,
     )
     return {
         "ok": True,
         "provider": provider,
     }
-

@@ -1383,6 +1383,12 @@ body.is-pane-resizing iframe {
 }
 .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14, 165, 165, 0.1); }
 .field-input::placeholder { color: var(--text-placeholder); }
+.settings-textarea {
+  min-height: 120px;
+  line-height: 1.55;
+  resize: vertical;
+  font-family: var(--font-sans);
+}
 .field-select {
   font-family: var(--font-sans);
   cursor: pointer;
@@ -2289,150 +2295,9 @@ a:hover { color: var(--accent-hover); }
 }
 .tts-play-btn:hover { opacity: 1; }
 
-/* ===== Companion Layout ===== */
-.companion-layout {
-  flex: 1; min-height: 0; height: auto;
-  display: grid;
-  grid-template-columns: minmax(420px, 1.25fr) minmax(320px, 0.75fr);
-  gap: var(--space-3);
-  padding: var(--space-3);
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.companion-card {
-  height: 100%;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
-  display: flex; flex-direction: column;
-}
-
-.companion-left,
-.companion-right {
-  min-width: 0; min-height: 0; display: flex;
-}
-
-.companion-chat-card { display: flex; flex-direction: column; min-height: 0; }
-.companion-right > .companion-card { flex: 1; min-height: 0; }
-
-.companion-card-head {
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border-light);
-  display: flex; align-items: center; justify-content: space-between;
-  flex-shrink: 0;
-}
-.companion-title {
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  color: var(--text-primary);
-}
-.companion-subtitle {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted); margin-top: 2px;
-}
-.companion-head-controls {
-  display: flex; align-items: center; gap: var(--space-3);
-}
-.companion-route-select {
-  min-width: 140px; height: 30px;
-  padding: 4px 10px; font-size: var(--font-size-xs);
-}
-.companion-live2d-btn {
-  height: 30px;
-  padding-inline: 10px;
-}
-
-/* ===== Mic Switch ===== */
-.mic-switch {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-size: var(--font-size-xs); color: var(--text-secondary);
-  font-weight: var(--font-weight-medium);
-}
-.mic-switch input { accent-color: var(--accent); }
-
-/* ===== Companion Meter ===== */
-.companion-meter-wrap { display: flex; align-items: center; gap: var(--space-2); min-width: 150px; }
-.companion-meter-label {
-  font-size: var(--font-size-xs); color: var(--text-muted);
-  width: 70px; text-transform: capitalize;
-  font-family: var(--font-mono);
-}
-.companion-meter {
-  flex: 1; height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--bg-overlay);
-  overflow: hidden;
-}
-.companion-meter-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), #38b2ac, #63b3ed);
-  transition: width 100ms linear;
-  border-radius: var(--radius-full);
-}
-
-/* ===== Live2D Window ===== */
-.live2d-window-only {
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: #f5f7fa;
-}
-.live2d-window-head {
-  height: 34px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  padding: 0 calc(var(--window-controls-w) + var(--space-4)) 0 var(--space-4);
-  color: #435669;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  border-bottom: 1px solid rgba(67, 86, 105, 0.12);
-  background: rgba(245, 247, 250, 0.88);
-  -webkit-app-region: drag;
-}
-.live2d-window-body {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* ===== Monitor Panel ===== */
-.monitor-card { display: flex; flex-direction: column; }
-.monitor-title {
-  padding: 10px 12px; border-bottom: 1px solid var(--border-light);
-  font-size: var(--font-size-xs); color: var(--text-secondary);
-  font-weight: var(--font-weight-medium);
-}
-.monitor-list {
-  flex: 1; overflow: auto; min-height: 0;
-  padding: var(--space-2);
-  display: flex; flex-direction: column; gap: 4px;
-  font-family: var(--font-mono); font-size: var(--font-size-xs);
-}
-.companion-chat-area { min-height: 0; overscroll-behavior: contain; }
-.monitor-empty { color: var(--text-muted); padding: var(--space-2); }
-.monitor-item { display: flex; gap: 6px; line-height: 1.5; padding: 2px 0; }
-.monitor-time { color: var(--text-muted); flex-shrink: 0; }
-.monitor-item.input .monitor-text { color: #6366f1; }
-.monitor-item.output .monitor-text { color: #0ea57a; }
-.monitor-item.speech .monitor-text { color: #0ea5a5; }
-.monitor-item.error .monitor-text { color: #e5484d; }
-
 /* ===== Responsive Breakpoints ===== */
 @media (max-width: 1400px) {
   .course-chat-right { min-width: 0; }
-}
-
-@media (max-width: 1260px) {
-  .companion-layout {
-    grid-template-columns: minmax(320px, 1.05fr) minmax(300px, 0.85fr);
-    gap: var(--space-2); padding: var(--space-2);
-  }
 }
 
 @media (max-width: 1080px) {
@@ -2480,11 +2345,6 @@ a:hover { color: var(--accent-hover); }
   }
   .workspace-scroll { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
   .workspace-bottom { display: none; }
-  .companion-layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(300px, 1fr) minmax(220px, 0.45fr);
-    gap: var(--space-2); padding: var(--space-2);
-  }
   .msg-bubble, .refs { max-width: 85%; }
   .page-container { padding: var(--space-6) var(--space-8); }
 }

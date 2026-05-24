@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react'
-import { IconBook, IconChat, IconCompanion, IconLogo, IconSettings } from '../shared/icons'
+import { IconBook, IconChat, IconLogo, IconSettings } from '../shared/icons'
 import { createProjectChatThread, THREAD_DEFAULT_TITLE } from '../shared/threads'
 
 export default function Workspace({
@@ -139,10 +139,6 @@ export default function Workspace({
       </div>
 
       <div className="workspace-bottom">
-        <button className={`workspace-nav-btn ${page === 'companion' ? 'active' : ''}`} onClick={() => onPage('companion')}>
-          <IconCompanion />
-          <span>陪伴聊天</span>
-        </button>
         <button className={`workspace-nav-btn ${page === 'settings' ? 'active' : ''}`} onClick={() => onPage('settings')}>
           <IconSettings />
           <span>设置</span>

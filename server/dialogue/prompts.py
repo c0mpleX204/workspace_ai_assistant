@@ -22,13 +22,8 @@ DEFAULT_COMPANION_PERSONA_PROMPT = (
 
 DEFAULT_COMPANION_SYSTEM_PROMPT_TEMPLATE = (
     "你是一个实时桌面陪伴助手（persona_id={persona_id}, scene={scene}）。"
-    "请只输出 JSON，不要输出额外解释，格式必须是："
-    "{\"reply\":\"...\",\"tts_text\":\"...\","
-    "\"emotion\":\"neutral|smile|sad|angry|surprised\","
-    "\"action_intents\":[{\"type\":\"live2d_expression|live2d_motion|live2d_look_at|game_control\","
-    "\"payload\":{}}]}。"
-    "reply 给 UI 展示；tts_text 给语音播报（可比 reply 更短）。"
-    "action_intents 可以为空数组。"
+    "请保持短句、低延迟、稳定陪伴感。"
+    "先回应用户情绪，再给必要的简短建议；不要编造已经执行的动作。"
 )
 
 QUERY_REWRITE_SYSTEM_PROMPT = (

@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { chatStreamApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi, deleteCourseApi } from './api'
@@ -24,22 +24,18 @@ import {
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
-const CompanionChatPage = lazy(() => import('./CompanionChatPage'))
-const Live2DViewer = lazy(() => import('./Live2DViewer'))
 const APP_SEARCH_PARAMS = new URLSearchParams(window.location.search)
 const IS_TERMINAL_WINDOW = APP_SEARCH_PARAMS.get('terminalWindow') === '1'
-const IS_LIVE2D_WINDOW = APP_SEARCH_PARAMS.get('live2dWindow') === '1'
 const INITIAL_TERMINAL_SESSION_ID = APP_SEARCH_PARAMS.get('sessionId') || ''
-const INITIAL_LIVE2D_BG_URL = APP_SEARCH_PARAMS.get('bg') || ''
 
 export default function App() {
-  const LIVE2D_BG_KEY = 'desktop_live2d_bg_url_v1'
   const [backendUrl, setBackendUrl] = useState(() => window.env?.BACKEND_URL || 'http://127.0.0.1:8000')
   const [userId, setUserId] = useState('user1')
   const [providerSettings, setProviderSettings] = useState(DEFAULT_PROVIDER_SETTINGS)
   const [providerDraft, setProviderDraft] = useState({
     api_base_url: '',
     api_key: '',
+    companion_persona_prompt: '',
   })
   const [savingProvider, setSavingProvider] = useState(false)
   const [sessionId] = useState('default')
@@ -66,10 +62,6 @@ export default function App() {
   const [selectedAudioOutput, setSelectedAudioOutput] = useState('')
   // TTS 朗读开关
   const [ttsEnabled, setTtsEnabled] = useState(false)
-  const [live2dBgUrl, setLive2dBgUrl] = useState(() => {
-    try { return localStorage.getItem(LIVE2D_BG_KEY) || '' } catch { return '' }
-  })
-  const [live2dWindowBgUrl, setLive2dWindowBgUrl] = useState(INITIAL_LIVE2D_BG_URL)
   const [isMaximized, setIsMaximized] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalSessions, setTerminalSessions] = useState([])
@@ -246,14 +238,6 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(LIVE2D_BG_KEY, String(live2dBgUrl || '').trim())
-    } catch (e) {
-      void e
-    }
-  }, [live2dBgUrl])
-
-  useEffect(() => {
-    try {
       localStorage.setItem('workspace_sidebar_width_v1', String(Math.round(workspaceSidebarWidth)))
     } catch (e) {
       void e
@@ -288,6 +272,7 @@ export default function App() {
       setProviderDraft({
         api_base_url: provider.api_base_url || '',
         api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
+        companion_persona_prompt: provider.companion_persona_prompt || provider.default_companion_persona_prompt || '',
       })
     } catch (e) {
       if (showErrors) showToast('模型 API 设置读取失败: ' + (e?.message || e), 'error')
@@ -308,12 +293,14 @@ export default function App() {
       if (keyText !== MASKED_KEY_VALUE) {
         payload.api_key = keyText.trim()
       }
+      payload.companion_persona_prompt = String(providerDraft.companion_persona_prompt || '').trim()
       const res = await updateProviderSettingsApi(backendUrl, payload)
       const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
       setProviderSettings(provider)
       setProviderDraft({
         api_base_url: provider.api_base_url || '',
         api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
+        companion_persona_prompt: provider.companion_persona_prompt || provider.default_companion_persona_prompt || '',
       })
       showToast('模型 API 设置已保存', 'success')
     } catch (e) {
@@ -640,19 +627,6 @@ export default function App() {
     }
   }
 
-  async function openLive2DWindow() {
-    if (!window.windowApi?.openLive2DWindow) {
-      showToast('当前运行环境不支持弹出 Live2D', 'error')
-      return
-    }
-    try {
-      await window.windowApi.openLive2DWindow(live2dBgUrl)
-      showToast('Live2D 已弹出', 'success')
-    } catch (e) {
-      showToast('弹出 Live2D 失败: ' + (e?.message || e), 'error')
-    }
-  }
-
   function startTerminalResize(e) {
     e.preventDefault()
     terminalResizeStartRef.current = {
@@ -738,16 +712,6 @@ export default function App() {
           setActiveTerminalId(current => current === event.sessionId ? (next[0]?.sessionId || '') : current)
           return next
         })
-      }
-    })
-    return () => { if (typeof unsub === 'function') unsub() }
-  }, [])
-
-  useEffect(() => {
-    if (!IS_LIVE2D_WINDOW || !window.windowApi?.onLive2DWindowEvent) return
-    const unsub = window.windowApi.onLive2DWindowEvent((event) => {
-      if (event?.type === 'background') {
-        setLive2dWindowBgUrl(String(event.backgroundImageUrl || ''))
       }
     })
     return () => { if (typeof unsub === 'function') unsub() }
@@ -1093,21 +1057,6 @@ export default function App() {
     )
   }
 
-  if (IS_LIVE2D_WINDOW) {
-    return (
-      <div className="live2d-window-only">
-        <div className="live2d-window-head">
-          <span>Live2D</span>
-        </div>
-        <div className="live2d-window-body">
-          <Suspense fallback={null}>
-            <Live2DViewer backgroundImageUrl={live2dWindowBgUrl} />
-          </Suspense>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className={`app${workspaceSidebarResizing ? ' is-resizing' : ''}`} ref={appRef}>
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
@@ -1140,7 +1089,7 @@ export default function App() {
       <div className="main">
         <div className="topbar">
           <span className="topbar-title">
-            {page==='course_chat' ? (activeCourse?.name || '项目对话') : page==='chat' ? '无项目对话' : page==='companion' ? '陪伴聊天' : '设置'}
+            {page==='course_chat' ? (activeCourse?.name || '项目对话') : page==='chat' ? '无项目对话' : '设置'}
           </span>
           {page==='course_chat' && activeProjectThread && <span className="topbar-tag">{activeProjectThread.title || THREAD_DEFAULT_TITLE}</span>}
           <div className="topbar-spacer"/>
@@ -1154,7 +1103,7 @@ export default function App() {
               <span>CLI</span>
             </button>
           )}
-          {(page==='chat' || page==='companion') && (
+          {page==='chat' && (
             <span className={`topbar-status ${loading?'loading':''}`}>
               {loading ? '生成中…' : lastLatency ? `${lastLatency}ms` : '就绪'}
             </span>
@@ -1232,19 +1181,6 @@ export default function App() {
           />
         )}
 
-        {page==='companion' && (
-          <Suspense fallback={null}>
-            <CompanionChatPage
-              backendUrl={backendUrl}
-              userId={userId}
-              sessionId={sessionId}
-              selectedAudioInput={selectedAudioInput}
-              selectedAudioOutput={selectedAudioOutput}
-              onOpenLive2D={openLive2DWindow}
-              showToast={showToast}
-            />
-          </Suspense>
-        )}
         {page==='settings' && (
           <Settings
             backendUrl={backendUrl}
@@ -1257,8 +1193,6 @@ export default function App() {
             savingProvider={savingProvider}
             saveProviderSettings={saveProviderSettings}
             loadProviderSettings={loadProviderSettings}
-            live2dBgUrl={live2dBgUrl}
-            setLive2dBgUrl={setLive2dBgUrl}
             audioInputs={audioInputs}
             audioOutputs={audioOutputs}
             selectedAudioInput={selectedAudioInput}

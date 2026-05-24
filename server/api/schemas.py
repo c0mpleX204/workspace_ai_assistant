@@ -244,62 +244,6 @@ class SkillListResponse(BaseModel):
     total: int = 0
 
 
-class CompanionMessage(BaseModel):
-    role: MessageRole
-    content: str = ""
-
-
-class CompanionActionIntent(BaseModel):
-    type: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
-
-
-class CompanionChatRequest(BaseModel):
-    user_id: str = "user1"
-    session_id: str
-    messages: List[CompanionMessage] = Field(default_factory=list)
-    image_url: Optional[str] = None
-    audio_url: Optional[str] = None
-    persona_id: Optional[str] = "default_companion"
-    scene: Optional[str] = "desktop"
-    model: Optional[str] = None
-    route_mode: Optional[str] = "auto"
-    capability_ide: bool = False
-
-
-class CompanionChatResponse(BaseModel):
-    reply: str = ""
-    tts_text: str = ""
-    emotion: str = "neutral"
-    action_intents: List[CompanionActionIntent] = Field(default_factory=list)
-    latency_ms: int = 0
-    delegated_task: Dict[str, Any] | None = None
-    route_decision: Dict[str, Any] | None = None
-
-
-class CompanionActRequest(BaseModel):
-    user_id: str
-    session_id: str
-    action_intents: List[CompanionActionIntent] = Field(default_factory=list)
-
-
-class CompanionActResponse(BaseModel):
-    ok: bool = True
-    applied: List[CompanionActionIntent] = Field(default_factory=list)
-    rejected: List[str] = Field(default_factory=list)
-
-
-class CompanionTaskPollRequest(BaseModel):
-    user_id: str = "user1"
-    session_id: str
-    task_id: Optional[str] = None
-
-
-class TaskPollResponse(BaseModel):
-    ok: bool = True
-    task: Dict[str, Any] | None = None
-
-
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1)
     voice: str = ""
@@ -309,3 +253,4 @@ class TTSRequest(BaseModel):
 class ProviderConfigUpdateRequest(BaseModel):
     api_base_url: Optional[str] = None
     api_key: Optional[str] = None
+    companion_persona_prompt: Optional[str] = None

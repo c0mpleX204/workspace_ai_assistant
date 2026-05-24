@@ -8,6 +8,8 @@ export const DEFAULT_PROVIDER_SETTINGS = {
   has_api_key: false,
   fast_model: '',
   heavy_model: '',
+  companion_persona_prompt: '',
+  default_companion_persona_prompt: '',
 }
 
 export default function Settings({
@@ -21,8 +23,6 @@ export default function Settings({
   savingProvider,
   saveProviderSettings,
   loadProviderSettings,
-  live2dBgUrl,
-  setLive2dBgUrl,
   audioInputs,
   audioOutputs,
   selectedAudioInput,
@@ -101,19 +101,32 @@ export default function Settings({
       </div>
 
       <div className="settings-card">
-        <div className="settings-card-title">显示</div>
+        <div className="settings-card-title">陪伴 Persona</div>
         <div className="field-group">
           <div className="field">
-            <label className="field-label">Live2D 背景图 URL</label>
-            <div className="field-row">
-              <input
-                className="field-input"
-                value={live2dBgUrl}
-                onChange={e => setLive2dBgUrl(e.target.value)}
-                placeholder="https://... 或留空使用默认背景"
-              />
-              <button className="ghost-btn" onClick={() => setLive2dBgUrl('')} title="恢复默认背景">清空</button>
-            </div>
+            <label className="field-label">自定义 Prompt</label>
+            <textarea
+              className="field-input settings-textarea"
+              value={providerDraft.companion_persona_prompt}
+              onChange={e => setProviderDraft(v => ({ ...v, companion_persona_prompt: e.target.value }))}
+              placeholder={providerSettings.default_companion_persona_prompt || '输入陪伴聊天的默认 persona prompt'}
+              rows={5}
+            />
+          </div>
+          <div className="field-row">
+            <button
+              className="ghost-btn"
+              onClick={() => setProviderDraft(v => ({
+                ...v,
+                companion_persona_prompt: providerSettings.default_companion_persona_prompt || '',
+              }))}
+              disabled={savingProvider}
+            >
+              恢复默认
+            </button>
+            <button className="ghost-btn" onClick={saveProviderSettings} disabled={savingProvider}>
+              {savingProvider ? '保存中' : '保存 Persona'}
+            </button>
           </div>
         </div>
       </div>
