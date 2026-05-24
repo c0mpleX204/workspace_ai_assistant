@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { chatStreamApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi } from './api'
+import { chatStreamApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi, deleteCourseApi } from './api'
 import CourseChatPage from './CourseChatPage'
 import Chat from './app/Chat'
 import Settings, { DEFAULT_PROVIDER_SETTINGS, MASKED_KEY_VALUE } from './app/Settings'
@@ -83,6 +83,8 @@ export default function App() {
     } catch { return 292 }
   })
   const [workspaceSidebarResizing, setWorkspaceSidebarResizing] = useState(false)
+  const [showCreateProjectDialog, setShowCreateProjectDialog] = useState(false)
+  const [newProjectName, setNewProjectName] = useState('')
 
   const appRef = useRef(null)
   const messagesEndRef = useRef(null)
@@ -346,6 +348,49 @@ export default function App() {
     setLastLatency(null)
   }
 
+  function deleteThread(threadId) {
+    setChatThreads(prev => {
+      const next = prev.filter(t => t.id !== threadId)
+      if (next.length === 0) {
+        const fallback = createChatThread('chat_default')
+        return [fallback]
+      }
+      return next
+    })
+    if (activeThreadId === threadId) {
+      setChatThreads(prev => {
+        const next = prev.filter(t => t.id !== threadId)
+        const fallback = next[0] || createChatThread('chat_default')
+        setActiveChatThreadId(fallback.id)
+        return next.length > 0 ? next : [fallback]
+      })
+    }
+  }
+
+  function deleteProjectThread(courseId, threadId) {
+    closeProjectThread(courseId, threadId)
+  }
+
+  async function deleteProject(courseId) {
+    try {
+      await deleteCourseApi(backendUrl, courseId)
+      setCourses(prev => prev.filter(c => String(c.course_id) !== String(courseId)))
+      setProjectThreads(prev => {
+        const next = { ...prev }
+        delete next[String(courseId)]
+        return next
+      })
+      if (activeCourse && String(activeCourse.course_id) === String(courseId)) {
+        setActiveCourse(null)
+        setPage('chat')
+        setActiveProjectThreadId('')
+      }
+      showToast('项目已删除', 'success')
+    } catch (e) {
+      showToast('删除项目失败: ' + (e?.message || e), 'error')
+    }
+  }
+
   function openThread(threadId) {
     setActiveChatThreadId(threadId)
     setActiveCourse(null)
@@ -393,12 +438,19 @@ export default function App() {
     }
   }
 
-  async function createProjectFromSidebar() {
-    const name = window.prompt('新项目名称')
-    if (!name || !name.trim()) return
+  function createProjectFromSidebar() {
+    setNewProjectName('')
+    setShowCreateProjectDialog(true)
+  }
+
+  async function confirmCreateProject() {
+    const name = newProjectName.trim()
+    if (!name) return
+    setShowCreateProjectDialog(false)
+    setNewProjectName('')
     try {
       const created = await createCourseApi(backendUrl, {
-        name: name.trim(),
+        name,
         term: null,
         owner_id: userId,
       })
@@ -406,7 +458,7 @@ export default function App() {
       const normalized = {
         ...course,
         course_id: course.course_id,
-        name: course.name || name.trim(),
+        name: course.name || name,
         doc_count: course.doc_count || 0,
       }
       setCourses(prev => [normalized, ...prev])
@@ -1067,6 +1119,7 @@ export default function App() {
         sortedThreads={sortedThreads}
         onNewThread={newThread}
         onOpenThread={openThread}
+        onDeleteThread={deleteThread}
         courses={courses}
         coursesLoading={coursesLoading}
         projectThreads={projectThreads}
@@ -1076,6 +1129,8 @@ export default function App() {
         onCreateProject={createProjectFromSidebar}
         onOpenProject={openProject}
         onNewProjectThread={newProjectThread}
+        onDeleteProjectThread={deleteProjectThread}
+        onDeleteProject={deleteProject}
         onPage={setPage}
       />
       <div
@@ -1216,6 +1271,27 @@ export default function App() {
           />
         )}
       </div>
+      {showCreateProjectDialog && (
+        <div className="dialog-backdrop" onClick={() => setShowCreateProjectDialog(false)}>
+          <div className="dialog" onClick={e => e.stopPropagation()}>
+            <div className="dialog-head">新建项目</div>
+            <div className="dialog-body">
+              <input
+                className="dialog-input"
+                value={newProjectName}
+                onChange={e => setNewProjectName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') confirmCreateProject() }}
+                placeholder="输入项目名称"
+                autoFocus
+              />
+            </div>
+            <div className="dialog-foot">
+              <button className="ghost-btn" onClick={() => setShowCreateProjectDialog(false)}>取消</button>
+              <button className="primary-btn" onClick={confirmCreateProject} disabled={!newProjectName.trim()}>创建</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className={`toast ${toast.type} ${toast.visible?'show':''}`}>{toast.msg}</div>
     </div>
   )

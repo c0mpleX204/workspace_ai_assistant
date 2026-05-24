@@ -467,6 +467,75 @@ export async function saveWorkspaceFileApi(baseUrl, courseId, payload) {
   return JSON.parse(text)
 }
 
+export async function createWorkspaceFileApi(baseUrl, courseId, payload) {
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/file`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function createWorkspaceDirectoryApi(baseUrl, courseId, payload) {
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/directory`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function deleteWorkspaceFileApi(baseUrl, courseId, path) {
+  const params = new URLSearchParams({ path: String(path || '') })
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/file?${params.toString()}`
+  const res = await fetch(url, { method: 'DELETE' })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function deleteWorkspaceDirectoryApi(baseUrl, courseId, path, recursive = false) {
+  const params = new URLSearchParams({ path: String(path || ''), recursive: String(recursive) })
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/directory?${params.toString()}`
+  const res = await fetch(url, { method: 'DELETE' })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function renameWorkspaceItemApi(baseUrl, courseId, payload) {
+  const url = `${getBackend(baseUrl)}/courses/${courseId}/workspace/rename`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
 export function getMaterialViewUrl(baseUrl, documentId) {
   return `${getBackend(baseUrl)}/materials/${documentId}/view`
 }

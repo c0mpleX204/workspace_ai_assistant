@@ -8,6 +8,11 @@ import {
   listWorkspaceFilesApi,
   readWorkspaceFileApi,
   saveWorkspaceFileApi,
+  createWorkspaceFileApi,
+  createWorkspaceDirectoryApi,
+  deleteWorkspaceFileApi,
+  deleteWorkspaceDirectoryApi,
+  renameWorkspaceItemApi,
 } from './api'
 import { Message, TypingIndicator } from './course/Dialog'
 import {
@@ -31,6 +36,8 @@ import {
   buildThreadTitle,
 } from './course/context'
 import { estimateOutputTokens, fileNameFromPath, fileToDataUrl } from './shared/text'
+
+const PdfViewer = React.lazy(() => import('./shared/PdfViewer'))
 
 
 export default function CourseChatPage({
@@ -57,6 +64,11 @@ export default function CourseChatPage({
   const [lastLatency, setLastLatency] = useState(null)
   const [pendingImages, setPendingImages] = useState([])
   const [isDragging, setIsDragging] = useState(false)
+  const [fileTreeDragOver, setFileTreeDragOver] = useState(false)
+  const [importingFiles, setImportingFiles] = useState(false)
+  const [rootCreating, setRootCreating] = useState(null) // 'file' | 'folder' | null
+  const [rootCreateValue, setRootCreateValue] = useState('')
+  const [fileTreeContextMenu, setFileTreeContextMenu] = useState(null)
   const [uploadState, setUploadState] = useState({ title: '', file: null })
   const [uploadProgress, setUploadProgress] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
@@ -94,6 +106,7 @@ export default function CourseChatPage({
   const composerRef = useRef(null)
   const attachPickerRef = useRef(null)
   const editorRef = useRef(null)
+  const rootCreatingGuardRef = useRef(false)
   const chatSessionId = String(sessionId || '').startsWith('course_')
     ? String(sessionId)
     : `course_${course.course_id}_${sessionId || 'default'}`
@@ -798,6 +811,158 @@ export default function CourseChatPage({
     }
   }
 
+  async function handleImportFiles(files) {
+    const fileList = Array.from(files || [])
+    if (fileList.length === 0) return
+    setImportingFiles(true)
+    let ok = 0
+    let fail = 0
+    for (const file of fileList) {
+      try {
+        const form = new FormData()
+        form.append('course_id', course.course_id)
+        form.append('title', file.name)
+        form.append('file', file)
+        await uploadMaterialApi(backendUrl, form)
+        ok++
+      } catch (e) {
+        fail++
+        void e
+      }
+    }
+    setImportingFiles(false)
+    if (ok > 0) {
+      showToast(`导入完成：${ok} 个成功${fail > 0 ? `，${fail} 个失败` : ''}`, fail > 0 ? 'error' : 'success')
+      fetchWorkspaceFiles()
+    } else {
+      showToast('导入失败', 'error')
+    }
+  }
+
+  function handleFileTreeDragOver(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    setFileTreeDragOver(true)
+  }
+
+  function handleFileTreeDragLeave(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    setFileTreeDragOver(false)
+  }
+
+  function handleFileTreeContextMenu(e) {
+    e.preventDefault()
+    setFileTreeContextMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  function handleFileTreeDrop(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    setFileTreeDragOver(false)
+    handleImportFiles(e.dataTransfer.files)
+  }
+
+  function handleImportClick(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.multiple = true
+    input.onchange = () => {
+      if (input.files && input.files.length > 0) {
+        handleImportFiles(input.files)
+      }
+      input.remove()
+    }
+    input.click()
+  }
+
+  async function handleRootCreateConfirm() {
+    if (rootCreatingGuardRef.current) return
+    rootCreatingGuardRef.current = true
+    const type = rootCreating
+    const val = rootCreateValue.trim()
+    setRootCreating(null)
+    setRootCreateValue('')
+    if (!val || !type) { rootCreatingGuardRef.current = false; return }
+    if (type === 'file') {
+      await handleCreateFile('', val)
+    } else {
+      await handleCreateFolder('', val)
+    }
+    rootCreatingGuardRef.current = false
+  }
+
+  function handleRootCreateCancel() {
+    if (rootCreatingGuardRef.current) return
+    setRootCreating(null)
+    setRootCreateValue('')
+  }
+
+  async function handleCreateFile(parentPath, name) {
+    try {
+      const filePath = parentPath ? `${parentPath}/${name}` : name
+      await createWorkspaceFileApi(backendUrl, course.course_id, { path: filePath, content: '' })
+      showToast(`文件 ${name} 已创建`, 'success')
+      fetchWorkspaceFiles()
+    } catch (e) {
+      showToast('创建文件失败: ' + (e?.message || e), 'error')
+    }
+  }
+
+  async function handleCreateFolder(parentPath, name) {
+    try {
+      const folderPath = parentPath ? `${parentPath}/${name}` : name
+      await createWorkspaceDirectoryApi(backendUrl, course.course_id, { path: folderPath })
+      showToast(`文件夹 ${name} 已创建`, 'success')
+      fetchWorkspaceFiles()
+    } catch (e) {
+      showToast('创建文件夹失败: ' + (e?.message || e), 'error')
+    }
+  }
+
+  async function handleDeleteItem(item) {
+    if (!window.confirm(`确定删除 ${item.name}？${item.type === 'directory' ? '将同时删除目录下所有文件。' : ''}`)) return
+    try {
+      if (item.type === 'directory') {
+        await deleteWorkspaceDirectoryApi(backendUrl, course.course_id, item.path, true)
+      } else {
+        await deleteWorkspaceFileApi(backendUrl, course.course_id, item.path)
+      }
+      // Close any open tabs for deleted files
+      if (item.type === 'file') {
+        setOpenFiles(prev => prev.filter(f => f.path !== item.path))
+        if (activeFilePath === item.path) setActiveFilePath('')
+      } else {
+        setOpenFiles(prev => prev.filter(f => !f.path.startsWith(item.path + '/')))
+        if (activeFilePath && activeFilePath.startsWith(item.path + '/')) setActiveFilePath('')
+      }
+      showToast(`${item.name} 已删除`, 'success')
+      fetchWorkspaceFiles()
+    } catch (e) {
+      showToast('删除失败: ' + (e?.message || e), 'error')
+    }
+  }
+
+  async function handleRenameItem(item, newName) {
+    try {
+      const parts = item.path.split('/')
+      parts[parts.length - 1] = newName
+      const targetPath = parts.join('/')
+      await renameWorkspaceItemApi(backendUrl, course.course_id, { source_path: item.path, target_path: targetPath })
+      // Update open file tabs
+      if (item.type === 'file') {
+        setOpenFiles(prev => prev.map(f => f.path === item.path ? { ...f, path: targetPath, name: newName } : f))
+        if (activeFilePath === item.path) setActiveFilePath(targetPath)
+      }
+      showToast(`已重命名为 ${newName}`, 'success')
+      fetchWorkspaceFiles()
+    } catch (e) {
+      showToast('重命名失败: ' + (e?.message || e), 'error')
+    }
+  }
+
   const hasInlineContext = !!selectedTextContext || pastedTextItems.length > 0
   const canSend = (input.trim() || pendingImages.length > 0 || attachedWorkspaceItems.length > 0 || hasInlineContext) && !loading
   const previewMaterial = materials.find(mat => mat.document_id === previewDocId)
@@ -811,23 +976,77 @@ export default function CourseChatPage({
         <div className="course-sidebar-header">
           <button className="back-btn" onClick={onBack}>← 返回</button>
           <div className="course-sidebar-name" title={course.project_path || course.name}>{course.name}</div>
-          <button className="ghost-btn small" onClick={fetchWorkspaceFiles} disabled={workspaceLoading}>{workspaceLoading ? '刷新中' : '刷新'}</button>
+          <div style={{display:'flex',gap:2,alignItems:'center'}}>
+            <button className="sidebar-icon-btn" onClick={() => { setRootCreating('file'); setRootCreateValue('') }} title="新建文件" disabled={workspaceLoading}>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="14" height="14" strokeWidth="1.3"><path d="M3 2.5h6l4 4V13a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"/><path d="M9 2.5V6h3.5"/><line x1="6" y1="8.5" x2="10" y2="8.5"/><line x1="6" y1="10.5" x2="10" y2="10.5"/></svg>
+            </button>
+            <button className="sidebar-icon-btn" onClick={() => { setRootCreating('folder'); setRootCreateValue('') }} title="新建文件夹" disabled={workspaceLoading}>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="14" height="14" strokeWidth="1.3"><path d="M1.5 3.5h4.5l1 1.5h5.5a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1V3.5z"/><line x1="6" y1="8.5" x2="10" y2="8.5"/><line x1="8" y1="6.5" x2="8" y2="10.5"/></svg>
+            </button>
+            <button className="sidebar-icon-btn" onClick={handleImportClick} title="导入文件到工作区" disabled={importingFiles}>{importingFiles ? '...' : '↑'}</button>
+            <button className="ghost-btn small" onClick={fetchWorkspaceFiles} disabled={workspaceLoading}>{workspaceLoading ? '刷新中' : '刷新'}</button>
+          </div>
         </div>
 
         <div className="sidebar-section-label">项目文件</div>
-        <div className="workspace-file-tree sidebar-file-tree">
-          {workspaceLoading && <div className="workspace-file-empty">正在读取项目文件...</div>}
-          {!workspaceLoading && workspaceTree.length === 0 && <div className="workspace-file-empty">项目目录暂无文件</div>}
-          {!workspaceLoading && workspaceTree.map(item => (
+        <div
+          className={`workspace-file-tree sidebar-file-tree${fileTreeDragOver ? ' drag-over' : ''}`}
+          onDragOver={handleFileTreeDragOver}
+          onDragLeave={handleFileTreeDragLeave}
+          onDrop={handleFileTreeDrop}
+          onContextMenu={handleFileTreeContextMenu}
+        >
+          {importingFiles && <div className="workspace-file-empty">正在导入文件...</div>}
+          {!importingFiles && workspaceLoading && <div className="workspace-file-empty">正在读取项目文件...</div>}
+          {!importingFiles && !workspaceLoading && workspaceTree.length === 0 && (
+            <div className="workspace-file-empty">
+              <div>项目目录暂无文件</div>
+              <div style={{fontSize:12,color:'var(--text-muted)',marginTop:4}}>拖拽文件到此处导入，或点击上方 ↑ 按钮</div>
+            </div>
+          )}
+          {!importingFiles && !workspaceLoading && rootCreating && (
+            <div className="workspace-file-node">
+              <div className="workspace-file-row creating" style={{ paddingLeft: 8 }}>
+                <span className="workspace-file-icon">{rootCreating === 'folder' ? '▸' : '•'}</span>
+                <input
+                  className="workspace-inline-input"
+                  value={rootCreateValue}
+                  placeholder={rootCreating === 'file' ? '新建文件...' : '新建文件夹...'}
+                  onChange={e => setRootCreateValue(e.target.value)}
+                  onBlur={handleRootCreateCancel}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleRootCreateConfirm()
+                    if (e.key === 'Escape') { setRootCreating(null); setRootCreateValue(''); rootCreatingGuardRef.current = false }
+                  }}
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+          {!importingFiles && !workspaceLoading && workspaceTree.map(item => (
             <FileTreeNode
               key={`${item.type}:${item.path}`}
               item={item}
               activePath={activeFilePath}
               openFile={openWorkspaceFile}
+              onCreateFile={handleCreateFile}
+              onCreateFolder={handleCreateFolder}
+              onDelete={handleDeleteItem}
+              onRename={handleRenameItem}
             />
           ))}
         </div>
       </div>
+
+      {fileTreeContextMenu && (
+        <>
+          <div className="context-menu-backdrop" onClick={() => setFileTreeContextMenu(null)} onContextMenu={e => { e.preventDefault(); setFileTreeContextMenu(null) }} />
+          <div className="context-menu" style={{ left: fileTreeContextMenu.x, top: fileTreeContextMenu.y }}>
+            <button className="context-menu-item" onClick={() => { setFileTreeContextMenu(null); setRootCreating('file'); setRootCreateValue('') }}>新建文件</button>
+            <button className="context-menu-item" onClick={() => { setFileTreeContextMenu(null); setRootCreating('folder'); setRootCreateValue('') }}>新建文件夹</button>
+          </div>
+        </>
+      )}
 
       <div className="pane-resizer" onMouseDown={(e) => { e.preventDefault(); setResizing('left') }} />
 
@@ -1053,7 +1272,16 @@ export default function CourseChatPage({
               </div>
               <button className="preview-modal-close" onClick={() => { setPreviewDocId(null); setPreviewPageNo(null) }} title="关闭预览">×</button>
             </div>
-            <iframe className="preview-modal-frame" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1${previewPageNo ? `#page=${previewPageNo}` : ''}`} title="project file preview" />
+            {previewMaterial?.file_type === 'pdf' ? (
+              <React.Suspense fallback={<div className="pdf-viewer-status">加载 PDF 查看器...</div>}>
+                <PdfViewer
+                  url={getMaterialViewUrl(backendUrl, previewDocId)}
+                  initialPage={previewPageNo || 1}
+                />
+              </React.Suspense>
+            ) : (
+              <iframe className="preview-modal-frame" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1${previewPageNo ? `#page=${previewPageNo}` : ''}`} title="project file preview" />
+            )}
           </div>
         </div>
       )}

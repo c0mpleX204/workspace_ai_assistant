@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useCallback } from 'react'
 import { IconBook, IconChat, IconCompanion, IconLogo, IconSettings } from '../shared/icons'
 import { createProjectChatThread, THREAD_DEFAULT_TITLE } from '../shared/threads'
 
@@ -10,6 +10,7 @@ export default function Workspace({
   sortedThreads,
   onNewThread,
   onOpenThread,
+  onDeleteThread,
   courses,
   coursesLoading,
   projectThreads,
@@ -19,8 +20,42 @@ export default function Workspace({
   onCreateProject,
   onOpenProject,
   onNewProjectThread,
+  onDeleteProjectThread,
+  onDeleteProject,
   onPage,
 }) {
+  const [contextMenu, setContextMenu] = useState(null)
+
+  const closeContextMenu = useCallback(() => setContextMenu(null), [])
+
+  const handleThreadContext = (e, threadId) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, threadId, courseId: null, type: 'thread' })
+  }
+
+  const handleProjectThreadContext = (e, courseId, threadId) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, threadId, courseId, type: 'projectThread' })
+  }
+
+  const handleProjectContext = (e, courseId) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, threadId: null, courseId, type: 'project' })
+  }
+
+  const executeContextAction = (action) => {
+    if (!contextMenu) return
+    const { threadId, courseId, type } = contextMenu
+    if (action === 'deleteThread' && type === 'thread') {
+      onDeleteThread?.(threadId)
+    } else if (action === 'deleteThread' && type === 'projectThread') {
+      onDeleteProjectThread?.(courseId, threadId)
+    } else if (action === 'deleteProject' && type === 'project') {
+      onDeleteProject?.(courseId)
+    }
+    setContextMenu(null)
+  }
+
   return (
     <aside
       className="workspace-sidebar"
@@ -48,6 +83,7 @@ export default function Workspace({
                 key={thread.id}
                 className={`workspace-thread ${page === 'chat' && activeThreadId === thread.id ? 'active' : ''}`}
                 onClick={() => onOpenThread(thread.id)}
+                onContextMenu={(e) => handleThreadContext(e, thread.id)}
                 title={thread.title || THREAD_DEFAULT_TITLE}
               >
                 <IconChat />
@@ -71,7 +107,12 @@ export default function Workspace({
             return (
               <div className={`workspace-project ${isActiveProject ? 'active' : ''}`} key={course.course_id}>
                 <div className="workspace-project-row">
-                  <button className="workspace-project-main" onClick={() => onOpenProject(course)} title={course.project_path || course.name}>
+                  <button
+                    className="workspace-project-main"
+                    onClick={() => onOpenProject(course)}
+                    onContextMenu={(e) => handleProjectContext(e, course.course_id)}
+                    title={course.project_path || course.name}
+                  >
                     <IconBook />
                     <span>{course.name}</span>
                   </button>
@@ -83,6 +124,7 @@ export default function Workspace({
                       key={thread.id}
                       className={`workspace-thread nested ${isActiveProject && activeProjectThreadId === thread.id ? 'active' : ''}`}
                       onClick={() => onOpenProject(course, thread.id)}
+                      onContextMenu={(e) => handleProjectThreadContext(e, course.course_id, thread.id)}
                       title={thread.title || THREAD_DEFAULT_TITLE}
                     >
                       <IconChat />
@@ -106,6 +148,19 @@ export default function Workspace({
           <span>设置</span>
         </button>
       </div>
+
+      {contextMenu && (
+        <>
+          <div className="context-menu-backdrop" onClick={closeContextMenu} onContextMenu={(e) => { e.preventDefault(); closeContextMenu() }} />
+          <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+            {contextMenu.type === 'project' ? (
+              <button className="context-menu-item danger" onClick={() => executeContextAction('deleteProject')}>删除项目</button>
+            ) : (
+              <button className="context-menu-item danger" onClick={() => executeContextAction('deleteThread')}>删除对话</button>
+            )}
+          </div>
+        </>
+      )}
     </aside>
   )
 }

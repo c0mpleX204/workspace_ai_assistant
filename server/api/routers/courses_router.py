@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from typing import Dict
 from urllib.parse import unquote
@@ -19,10 +20,14 @@ from server.api.schemas import (
     CourseUpdateRequest,
     MaterialItem,
     MaterialListResponse,
+    WorkspaceDeleteResponse,
+    WorkspaceDirectoryCreateRequest,
+    WorkspaceFileCreateRequest,
     WorkspaceFileItem,
     WorkspaceFileResponse,
     WorkspaceFileSaveRequest,
     WorkspaceFileSaveResponse,
+    WorkspaceRenameRequest,
     WorkspaceTreeResponse,
 )
 from server.services.project.workspace import ensure_course_workspace
@@ -303,4 +308,77 @@ def api_save_workspace_file(course_id: int, payload: WorkspaceFileSaveRequest) -
         size=stat.st_size,
         modified_at=stat.st_mtime,
     )
+
+
+@router.post("/courses/{course_id}/workspace/file", response_model=WorkspaceFileSaveResponse)
+def api_create_workspace_file(course_id: int, payload: WorkspaceFileCreateRequest) -> WorkspaceFileSaveResponse:
+    root = _workspace_for_course(course_id)
+    target = _resolve_workspace_file(root, payload.path)
+    if target.exists():
+        raise HTTPException(status_code=409, detail="文件已存在")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload.content, encoding="utf-8")
+    stat = target.stat()
+    return WorkspaceFileSaveResponse(
+        ok=True,
+        path=_relative_path(root, target),
+        size=stat.st_size,
+        modified_at=stat.st_mtime,
+    )
+
+
+@router.post("/courses/{course_id}/workspace/directory", response_model=WorkspaceDeleteResponse)
+def api_create_workspace_directory(course_id: int, payload: WorkspaceDirectoryCreateRequest) -> WorkspaceDeleteResponse:
+    root = _workspace_for_course(course_id)
+    target = _resolve_workspace_file(root, payload.path)
+    if target.exists():
+        raise HTTPException(status_code=409, detail="目录已存在")
+    target.mkdir(parents=True, exist_ok=True)
+    return WorkspaceDeleteResponse(ok=True, path=_relative_path(root, target))
+
+
+@router.delete("/courses/{course_id}/workspace/file", response_model=WorkspaceDeleteResponse)
+def api_delete_workspace_file(course_id: int, path: str) -> WorkspaceDeleteResponse:
+    root = _workspace_for_course(course_id)
+    target = _resolve_workspace_file(root, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="路径不是文件")
+    target.unlink()
+    return WorkspaceDeleteResponse(ok=True, path=_relative_path(root, target))
+
+
+@router.delete("/courses/{course_id}/workspace/directory", response_model=WorkspaceDeleteResponse)
+def api_delete_workspace_directory(course_id: int, path: str, recursive: bool = False) -> WorkspaceDeleteResponse:
+    root = _workspace_for_course(course_id)
+    target = _resolve_workspace_file(root, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="目录不存在")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="路径不是目录")
+    if recursive:
+        shutil.rmtree(str(target))
+    else:
+        try:
+            next(target.iterdir())
+            raise HTTPException(status_code=400, detail="目录不为空，请使用 recursive=true")
+        except StopIteration:
+            pass
+        target.rmdir()
+    return WorkspaceDeleteResponse(ok=True, path=_relative_path(root, target))
+
+
+@router.post("/courses/{course_id}/workspace/rename", response_model=WorkspaceDeleteResponse)
+def api_rename_workspace_item(course_id: int, payload: WorkspaceRenameRequest) -> WorkspaceDeleteResponse:
+    root = _workspace_for_course(course_id)
+    source = _resolve_workspace_file(root, payload.source_path)
+    target = _resolve_workspace_file(root, payload.target_path)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="源文件不存在")
+    if target.exists():
+        raise HTTPException(status_code=409, detail="目标路径已存在")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    return WorkspaceDeleteResponse(ok=True, path=_relative_path(root, target))
 

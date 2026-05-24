@@ -113,6 +113,25 @@ class WorkspaceFileSaveResponse(BaseModel):
     modified_at: Optional[float] = None
 
 
+class WorkspaceFileCreateRequest(BaseModel):
+    path: str
+    content: str = ""
+
+
+class WorkspaceDirectoryCreateRequest(BaseModel):
+    path: str
+
+
+class WorkspaceRenameRequest(BaseModel):
+    source_path: str
+    target_path: str
+
+
+class WorkspaceDeleteResponse(BaseModel):
+    ok: bool = True
+    path: str
+
+
 class ChatMessage(BaseModel):
     role: MessageRole
     content: str = Field(min_length=1)
