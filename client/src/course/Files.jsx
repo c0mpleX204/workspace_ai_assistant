@@ -43,7 +43,7 @@ export function collectWorkspaceFiles(node, out = []) {
   return out
 }
 
-export function FileTreeNode({ item, depth = 0, activePath, openFile, onCreateFile, onCreateFolder, onDelete, onRename }) {
+export function FileTreeNode({ item, depth = 0, activePath, openFile, openInVSCode, onCreateFile, onCreateFolder, onDelete, onRename }) {
   const isDirectory = item.type === 'directory'
   const children = Array.isArray(item.children) ? item.children : []
   const [expanded, setExpanded] = useState(depth < 1)
@@ -173,6 +173,7 @@ export function FileTreeNode({ item, depth = 0, activePath, openFile, onCreateFi
               depth={depth + 1}
               activePath={activePath}
               openFile={openFile}
+              openInVSCode={openInVSCode}
               onCreateFile={onCreateFile}
               onCreateFolder={onCreateFolder}
               onDelete={onDelete}
@@ -212,6 +213,7 @@ export function FileTreeNode({ item, depth = 0, activePath, openFile, onCreateFi
                 <div className="context-menu-divider" />
               </>
             )}
+            <button className="context-menu-item" onClick={() => { setContextMenu(null); if (openInVSCode) openInVSCode(item) }}>在 VS Code 中打开</button>
             <button className="context-menu-item" onClick={handleRenameStart}>重命名</button>
             <div className="context-menu-divider" />
             <button className="context-menu-item danger" onClick={handleDelete}>删除</button>

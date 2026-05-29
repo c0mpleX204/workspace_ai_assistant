@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('windowApi', {
     ipcRenderer.on('window-state-changed', handler);
     return () => ipcRenderer.removeListener('window-state-changed', handler);
   },
+  openInVSCode: (targetPath) => ipcRenderer.invoke('open-in-vscode', targetPath),
+  onAppMenuCommand: (callback) => {
+    const handler = (_event, command) => callback(String(command || ''));
+    ipcRenderer.on('app-menu-command', handler);
+    return () => ipcRenderer.removeListener('app-menu-command', handler);
+  },
   onTerminalEvent: (callback) => {
     const handler = (_event, payload) => callback(payload || {});
     ipcRenderer.on('terminal-event', handler);

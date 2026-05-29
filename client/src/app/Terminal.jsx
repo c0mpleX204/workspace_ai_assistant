@@ -1,20 +1,24 @@
 import React from 'react'
 import { IconTerminal } from '../shared/icons'
 
-function TerminalTabs({ sessions, activeSession, onSelect }) {
+function TerminalTabs({ sessions, activeSession, onSelect, onClose }) {
   return (
     <div className="terminal-tabs">
       {sessions.map((session, idx) => (
-        <button
+        <div
           key={session.sessionId}
-          type="button"
           className={`terminal-tab${session.sessionId === activeSession?.sessionId ? ' active' : ''}`}
           onClick={() => onSelect(session.sessionId)}
           title={session.cwd}
         >
           <span>{session.title || `终端 ${idx + 1}`}</span>
           {session.status === 'exited' && <em>已退出</em>}
-        </button>
+          <button
+            className="terminal-tab-close"
+            onClick={e => { e.stopPropagation(); onClose(session.sessionId) }}
+            title="关闭终端"
+          >×</button>
+        </div>
       ))}
     </div>
   )
@@ -38,11 +42,10 @@ export function TerminalWindow({
             <code title={activeTerminal?.cwd || ''}>{activeTerminal?.cwd || '终端窗口'}</code>
           </div>
           <div className="terminal-actions">
+            <TerminalTabs sessions={sessions} activeSession={activeTerminal} onSelect={onSelect} onClose={onClose} />
             <button type="button" className="ghost-btn small" onClick={onNew}>+</button>
-            <button type="button" className="ghost-btn small" onClick={() => onClose(activeTerminal?.sessionId)}>结束</button>
           </div>
         </div>
-        <TerminalTabs sessions={sessions} activeSession={activeTerminal} onSelect={onSelect} />
         <div
           className="terminal-screen"
           ref={screenRef}
@@ -88,13 +91,14 @@ export function TerminalDock({
           </code>
         </div>
         <div className="terminal-actions">
+          <TerminalTabs sessions={sessions} activeSession={activeTerminal} onSelect={onSelect} onClose={onClose} />
           <button type="button" className="ghost-btn small" onClick={onNew}>+</button>
           <button type="button" className="ghost-btn small" onClick={() => onPopout(activeTerminal?.sessionId)}>弹出</button>
-          <button type="button" className="ghost-btn small" onClick={onCollapse}>收起</button>
-          <button type="button" className="ghost-btn small" onClick={() => onClose(activeTerminal?.sessionId)}>结束</button>
+          {typeof onCollapse === 'function' && (
+            <button type="button" className="ghost-btn small" onClick={onCollapse}>收起</button>
+          )}
         </div>
       </div>
-      <TerminalTabs sessions={sessions} activeSession={activeTerminal} onSelect={onSelect} />
       <div
         className="terminal-screen"
         ref={screenRef}

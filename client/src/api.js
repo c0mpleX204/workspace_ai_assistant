@@ -1,7 +1,10 @@
 export const getBackend = (baseUrl) => baseUrl || (window.env && window.env.BACKEND_URL) || 'http://127.0.0.1:8000'
 
-export async function getProviderSettingsApi(baseUrl) {
-  const url = `${getBackend(baseUrl)}/settings/provider`
+export async function getProviderSettingsApi(baseUrl, userId = 'user1') {
+  const params = new URLSearchParams()
+  if (userId) params.set('user_id', userId)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  const url = `${getBackend(baseUrl)}/settings/provider${suffix}`
   const res = await fetch(url)
   const text = await res.text()
   if (!res.ok) {
@@ -24,6 +27,120 @@ export async function updateProviderSettingsApi(baseUrl, payload) {
     catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
   }
   return JSON.parse(text)
+}
+
+export async function listPersonasApi(baseUrl) {
+  const url = `${getBackend(baseUrl)}/personas`
+  const res = await fetch(url)
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function createPersonaApi(baseUrl, payload) {
+  const url = `${getBackend(baseUrl)}/personas`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    try { const j = JSON.parse(text); throw new Error(j.detail || JSON.stringify(j)) }
+    catch (e) { if (e.message !== text) throw e; throw new Error(text || res.statusText) }
+  }
+  return JSON.parse(text)
+}
+
+export async function personaApplyStreamApi(baseUrl, payload, handlers = {}) {
+  const url = `${getBackend(baseUrl)}/personas/apply/stream`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: handlers.signal,
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    try {
+      const j = JSON.parse(text)
+      throw new Error(j.detail || JSON.stringify(j))
+    } catch (e) {
+      if (e.message !== text) throw e
+      throw new Error(text || res.statusText)
+    }
+  }
+
+  if (!res.body) throw new Error('persona stream body is empty')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let fullText = ''
+
+  const parseEventChunk = (rawChunk) => {
+    const lines = rawChunk
+      .split('\n')
+      .map(x => x.trim())
+      .filter(Boolean)
+      .filter(x => x.startsWith('data:'))
+
+    for (const line of lines) {
+      const payloadText = line.slice(5).trim()
+      if (!payloadText) continue
+      let obj
+      try {
+        obj = JSON.parse(payloadText)
+      } catch {
+        continue
+      }
+
+      if (obj.error) throw new Error(String(obj.error))
+      if (obj.delta) {
+        fullText += String(obj.delta)
+        handlers.onDelta?.(String(obj.delta), fullText)
+      }
+      if (obj.usage) handlers.onUsage?.(obj.usage)
+      if (obj.status) handlers.onStatus?.(obj.status)
+      if (obj.done) {
+        if (obj.reply && !fullText) fullText = String(obj.reply)
+        handlers.onDone?.(obj)
+        return {
+          done: true,
+          reply: fullText,
+          latency_ms: Number(obj.latency_ms || 0),
+          usage: obj.usage || null,
+          model: obj.model || '',
+        }
+      }
+    }
+    return null
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const chunk = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      const end = parseEventChunk(chunk)
+      if (end?.done) return end
+    }
+  }
+
+  if (buffer.trim()) {
+    const end = parseEventChunk(buffer)
+    if (end?.done) return end
+  }
+
+  handlers.onDone?.({ done: true, reply: fullText, latency_ms: 0 })
+  return { done: true, reply: fullText, latency_ms: 0, usage: null, model: '' }
 }
 
 export async function getChatSessionApi(baseUrl, sessionId, userId = 'default_user') {
@@ -355,6 +472,10 @@ export async function updateCourseApi(baseUrl, courseId, payload) {
   const text = await res.text()
   if (!res.ok) { try { const j = JSON.parse(text); throw new Error(j.detail || text) } catch(e) { throw e } }
   return JSON.parse(text)
+}
+
+export function getWorkspaceFileRawUrl(baseUrl, courseId, filePath) {
+  return `${getBackend(baseUrl)}/courses/${courseId}/workspace/file/raw?path=${encodeURIComponent(filePath)}`
 }
 
 export async function listWorkspaceFilesApi(baseUrl, courseId) {

@@ -97,6 +97,8 @@ def _remote_provider_reply(
     provider: Dict[str, str],
     model_override: str | None = None,
     generation: Dict[str, object] | None = None,
+    thinking_enabled: bool = False,
+    tools: List[Dict] | None = None,
 ) -> Dict[str, object]:
     generation = generation or {}
     req_model = str(model_override or provider["model"])
@@ -106,13 +108,17 @@ def _remote_provider_reply(
 
     base_url = provider["api_base_url"].rstrip("/")
     url = f"{base_url}/chat/completions"
-    payload = {
+    payload: Dict[str, object] = {
         "model": req_model,
         "messages": messages,
         "temperature": req_temperature,
         "top_p": req_top_p,
         "max_tokens": req_max_tokens,
     }
+    if thinking_enabled:
+        payload["thinking"] = {"type": "enabled"}
+    if tools:
+        payload["tools"] = tools
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {provider['api_key']}",
@@ -151,9 +157,13 @@ def _remote_provider_reply(
         raise RuntimeError(f"remote api invalid response: {data}")
     message = choices[0].get("message") or {}
     content = _response_text(message.get("content", ""))
+    reasoning_content = _response_text(message.get("reasoning_content", ""))
+    tool_calls = message.get("tool_calls") or []
     latency_ms = int((time.time() - start) * 1000)
     return {
         "reply": str(content).strip(),
+        "reasoning": str(reasoning_content).strip() if reasoning_content else "",
+        "tool_calls": tool_calls,
         "latency_ms": latency_ms,
         "usage": normalize_token_usage(data.get("usage")),
         "model": req_model,
@@ -165,6 +175,8 @@ def _remote_generate_reply(
     messages: List[Dict[str, str]],
     model_override: str | None = None,
     generation: Dict[str, object] | None = None,
+    thinking_enabled: bool = False,
+    tools: List[Dict] | None = None,
 ) -> Dict[str, object]:
     providers = _build_remote_providers()
     errors: List[str] = []
@@ -175,6 +187,8 @@ def _remote_generate_reply(
                 provider,
                 model_override=model_override,
                 generation=generation,
+                thinking_enabled=thinking_enabled,
+                tools=tools,
             )
         except Exception as exc:
             errors.append(f"{provider['name']}: {exc}")
@@ -193,10 +207,89 @@ def warmup_model() -> Dict[str, str]:
     }
 
 
-def generate_reply(messages: List[Dict[str, str]]) -> Dict[str, object]:
+def generate_reply(
+    messages: List[Dict[str, str]],
+    thinking_enabled: bool = False,
+    tools: List[Dict] | None = None,
+) -> Dict[str, object]:
     if not messages:
         raise ValueError("messages cannot be empty")
-    return _remote_generate_reply(messages)
+    return _remote_generate_reply(messages, thinking_enabled=thinking_enabled, tools=tools)
+
+
+def remote_tool_call_loop(
+    messages: List[Dict[str, str]],
+    tools: List[Dict],
+    tool_handler: callable,
+    model_override: str | None = None,
+    generation: Dict[str, object] | None = None,
+    max_rounds: int = 5,
+    thinking_enabled: bool = False,
+) -> Dict[str, object]:
+    """Multi-turn tool calling loop.
+
+    Sends messages with tools to the model. If the model returns tool_calls,
+    each is dispatched to tool_handler(name, arguments) and the result is
+    appended as a tool message.  Loops until the model returns a text reply
+    or max_rounds is reached.
+    """
+    msgs = [dict(m) for m in messages]
+    generation = generation or {}
+    last_usage = None
+    reasoning = ""
+    all_reply = ""
+
+    for _ in range(max_rounds):
+        result = _remote_generate_reply(
+            msgs,
+            model_override=model_override,
+            generation=generation,
+            thinking_enabled=thinking_enabled,
+            tools=tools,
+        )
+        last_usage = result.get("usage")
+        if result.get("reasoning"):
+            reasoning = result["reasoning"]
+
+        tool_calls = result.get("tool_calls") or []
+        if not tool_calls:
+            reply = str(result.get("reply") or "")
+            all_reply = reply
+            break
+
+        assistant_msg: Dict[str, object] = {"role": "assistant", "content": result.get("reply") or None}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+        msgs.append(assistant_msg)
+
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            fn_name = str(fn.get("name") or "")
+            try:
+                fn_args = json.loads(str(fn.get("arguments") or "{}"))
+            except Exception:
+                fn_args = {}
+            try:
+                tool_result = tool_handler(fn_name, fn_args)
+                tool_result_str = str(tool_result) if not isinstance(tool_result, str) else tool_result
+            except Exception as exc:
+                tool_result_str = f"Error executing {fn_name}: {exc}"
+            msgs.append({
+                "role": "tool",
+                "tool_call_id": str(tc.get("id") or ""),
+                "content": tool_result_str,
+            })
+    else:
+        all_reply = ""
+
+    return {
+        "reply": all_reply,
+        "reasoning": reasoning,
+        "usage": last_usage,
+        "model": str(model_override or settings.remote_primary_model),
+    }
 
 
 def _has_image(input_data: dict) -> bool:
@@ -267,6 +360,8 @@ def remote_stream_events(
     messages: List[Dict[str, str]],
     model_override: str | None = None,
     generation: Dict[str, object] | None = None,
+    thinking_enabled: bool = False,
+    tools: List[Dict] | None = None,
 ) -> Iterator[Dict[str, object]]:
     generation = generation or {}
     providers = _build_remote_providers()
@@ -281,7 +376,7 @@ def remote_stream_events(
         "Authorization": f"Bearer {provider['api_key']}",
         "Content-Type": "application/json",
     }
-    payload = {
+    payload: Dict[str, object] = {
         "model": req_model,
         "messages": messages,
         "temperature": req_temperature,
@@ -290,6 +385,10 @@ def remote_stream_events(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if thinking_enabled:
+        payload["thinking"] = {"type": "enabled"}
+    if tools:
+        payload["tools"] = tools
 
     try:
         with requests.post(
@@ -308,8 +407,14 @@ def remote_stream_events(
                 if choices:
                     msg = choices[0].get("message") or {}
                     content = _response_text(msg.get("content", ""))
+                    reasoning = _response_text(msg.get("reasoning_content", ""))
+                    if reasoning:
+                        yield {"type": "reasoning", "delta": reasoning}
                     if content:
                         yield {"type": "delta", "delta": content}
+                    tool_calls = msg.get("tool_calls") or []
+                    if tool_calls:
+                        yield {"type": "tool_calls", "tool_calls": tool_calls}
                 if obj.get("usage"):
                     yield {"type": "usage", "usage": normalize_token_usage(obj.get("usage"))}
                 return
@@ -334,9 +439,16 @@ def remote_stream_events(
                 choices = obj.get("choices") or []
                 if not choices:
                     continue
-                delta = _response_text((choices[0].get("delta") or {}).get("content", ""))
-                if delta:
-                    yield {"type": "delta", "delta": delta}
+                delta = choices[0].get("delta") or {}
+                reasoning_delta = _response_text(delta.get("reasoning_content", ""))
+                if reasoning_delta:
+                    yield {"type": "reasoning", "delta": reasoning_delta}
+                content_delta = _response_text(delta.get("content", ""))
+                if content_delta:
+                    yield {"type": "delta", "delta": content_delta}
+                tool_calls_delta = delta.get("tool_calls") or []
+                if tool_calls_delta:
+                    yield {"type": "tool_calls_delta", "tool_calls": tool_calls_delta}
     except Exception as exc:
         raise RuntimeError(f"remote stream request failed: {exc}") from exc
 
@@ -352,6 +464,8 @@ def smart_model_dispatch(input_data: dict) -> dict:
     image_url = input_data.get("image_url", "")
     model_override = input_data.get("model")
     generation = input_data.get("generation")
+    thinking_enabled = bool(input_data.get("thinking_enabled", False))
+    tools = input_data.get("tools")
 
     if image_url or _has_image(input_data):
         return _remote_vision_reply(
@@ -366,6 +480,8 @@ def smart_model_dispatch(input_data: dict) -> dict:
             messages,
             model_override=model_override,
             generation=generation,
+            thinking_enabled=thinking_enabled,
+            tools=tools,
         )
 
     token = settings.remote_primary_api_key
@@ -395,5 +511,7 @@ def smart_model_dispatch(input_data: dict) -> dict:
         fallback_msgs,
         model_override=model_override,
         generation=generation,
+        thinking_enabled=thinking_enabled,
+        tools=tools,
     )
 

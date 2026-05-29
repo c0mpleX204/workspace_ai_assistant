@@ -73,6 +73,7 @@ def add_project_memory_ctx(messages: List[Dict[str, str]], project_memory_text: 
 def build_final_messages(
     merged_messages: List[Dict[str, str]],
     *,
+    persona_prompt: str = "",
     conversation_summary: str = "",
     memory_text: str = "",
     query: str | None = None,
@@ -81,7 +82,7 @@ def build_final_messages(
     command_context: str = "",
     project_memory_text: str = "",
 ) -> List[Dict[str, str]]:
-    final_messages = inject_system_prompt(merged_messages)
+    final_messages = inject_system_prompt(merged_messages, persona_prompt=persona_prompt)
     final_messages = inject_summary_as_system(final_messages, conversation_summary)
     if project_memory_text:
         final_messages = add_project_memory_ctx(final_messages, project_memory_text)

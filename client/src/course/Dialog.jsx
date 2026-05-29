@@ -16,11 +16,12 @@ function normalizePlan(message) {
 function AgentPlan({ plan }) {
   if (!plan || plan.length === 0) return null
   return (
-    <div className="agent-plan">
+    <div className="agent-task-list">
+      <div className="agent-task-list-title">任务列表</div>
       {plan.map(item => (
-        <div className={`agent-plan-item ${item.status || 'pending'}`} key={item.id || item.title}>
-          <span>{item.status === 'done' ? '✓' : item.status === 'running' ? '→' : '·'}</span>
-          <b>{item.title}</b>
+        <div className={`agent-task-item ${item.status || 'pending'}`} key={item.id || item.title}>
+          <span className="agent-task-check">{item.status === 'done' ? '✓' : item.status === 'running' ? '…' : ''}</span>
+          <span className="agent-task-title">{item.title}</span>
         </div>
       ))}
     </div>
@@ -46,10 +47,10 @@ export function Message({ m, onCitationClick }) {
   return (
     <div className={`msg-row ${m.role}`}>
       <div className="msg-meta">
-        <span>{m.role === 'user' ? '你' : 'AI'}</span>
+        <span className="msg-role">{m.role === 'user' ? '你' : 'AI'}</span>
         {timeText && <time>{timeText}</time>}
       </div>
-      <div className="msg-bubble">
+      <div className="msg-body">
         {m.attachments && m.attachments.length > 0 && (
           <div className="msg-attachments">
             {m.attachments.map(item => {
@@ -61,7 +62,7 @@ export function Message({ m, onCitationClick }) {
         {m.images && m.images.length > 0 && (
           <div className="msg-images">{m.images.map((src, i) => <img key={i} className="msg-img" src={src} alt="" />)}</div>
         )}
-        {contentText ? <span>{contentText}</span> : (m.streaming ? <span className="streaming-placeholder">正在生成...</span> : null)}
+        {contentText ? <div className="msg-text">{contentText}</div> : (m.streaming ? <span className="streaming-placeholder">正在生成...</span> : null)}
       </div>
       {m.role === 'assistant' && <AgentPlan plan={plan} />}
       {m.role === 'assistant' && m.refs && m.refs.length > 0 && (

@@ -21,11 +21,15 @@ def _insert_system_after_primary(
         return messages[: first_system_idx + 1] + [system_msg] + messages[first_system_idx + 1 :]
     return [system_msg] + messages
 
-def inject_system_prompt(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    persona = {"role": "system", "content": settings.persona_system_prompt}
+def inject_system_prompt(messages: List[Dict[str, str]], persona_prompt: str | None = None) -> List[Dict[str, str]]:
+    prompt = str(persona_prompt or "").strip() or settings.persona_system_prompt
+    persona = {"role": "system", "content": prompt}
     filtered = [
         m
         for m in messages
-        if not (m.get("role") == "system" and m.get("content") == settings.persona_system_prompt)
+        if not (
+            m.get("role") == "system"
+            and m.get("content") in {settings.persona_system_prompt, prompt}
+        )
     ]
     return [persona] + filtered

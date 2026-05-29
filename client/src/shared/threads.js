@@ -45,6 +45,8 @@ export function normalizeChatThreads(raw) {
       return {
         id: String(x.id),
         title: normalizeThreadTitle(x.title, buildChatThreadTitle(msgs)),
+        type: x.type || undefined,
+        personaId: x.personaId || undefined,
         messages: msgs,
         createdAt: Number(x.createdAt || Date.now()),
         updatedAt: Number(x.updatedAt || Date.now()),
@@ -62,6 +64,10 @@ export function normalizeProjectThreads(raw) {
       .map(x => ({
         id: String(x.id),
         title: normalizeThreadTitle(x.title),
+        type: x.type || undefined,
+        pdfDocumentId: x.pdfDocumentId || undefined,
+        pdfUrl: x.pdfUrl || undefined,
+        pdfInitialPage: x.pdfInitialPage || undefined,
         createdAt: Number(x.createdAt || Date.now()),
         updatedAt: Number(x.updatedAt || Date.now()),
       }))

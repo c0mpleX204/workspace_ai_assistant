@@ -16,6 +16,15 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      if (!Promise.withResolvers) {
+        Promise.withResolvers = function () {
+          let resolve, reject;
+          const p = new Promise(function (res, rej) { resolve = res; reject = rej; });
+          return { promise: p, resolve: resolve, reject: reject };
+        };
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -52,6 +52,7 @@ def rank_chunks(query_vec: List[float], chunks: List[Dict], top_k: int = 5) -> L
                 "document_id": c["document_id"],
                 "document_title": c["document_title"],
                 "page_no": c["page_no"],
+                "source_path": c.get("source_path"),
             }
         )
     scored.sort(key=lambda x: x["score"], reverse=True)
@@ -86,4 +87,3 @@ def embed_document_chunks(document_id: int, batch_size: int = 32) -> None:
                         (json.dumps(emb), chunk_id),
                     )
                 conn.commit()
-

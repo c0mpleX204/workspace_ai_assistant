@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { chatStreamApi, getProviderSettingsApi, updateProviderSettingsApi, getChatSessionApi, listCoursesApi, createCourseApi, deleteCourseApi } from './api'
+import {
+  chatStreamApi,
+  createPersonaApi,
+  getProviderSettingsApi,
+  updateProviderSettingsApi,
+  getChatSessionApi,
+  listPersonasApi,
+  listCoursesApi,
+  personaApplyStreamApi,
+  createCourseApi,
+  deleteCourseApi,
+  updateCourseApi,
+} from './api'
 import CourseChatPage from './CourseChatPage'
 import Chat from './app/Chat'
 import Settings, { DEFAULT_PROVIDER_SETTINGS, MASKED_KEY_VALUE } from './app/Settings'
@@ -9,6 +21,7 @@ import { TerminalDock, TerminalWindow } from './app/Terminal'
 import Workspace from './app/Workspace'
 import { IconTerminal as TerminalIcon } from './shared/icons'
 import { fileToDataUrl, estimateOutputTokens } from './shared/text'
+import { loadRuntimeFlags, trySlashCommand } from './shared/slashCommands'
 import { Lightbox, useToast } from './shared/toast'
 import { useSpeechInput } from './shared/speech'
 import {
@@ -27,20 +40,35 @@ import './styles.css'
 const APP_SEARCH_PARAMS = new URLSearchParams(window.location.search)
 const IS_TERMINAL_WINDOW = APP_SEARCH_PARAMS.get('terminalWindow') === '1'
 const INITIAL_TERMINAL_SESSION_ID = APP_SEARCH_PARAMS.get('sessionId') || ''
+const DEFAULT_USER_ID = 'user1'
+
+function pureConversationMessages(items) {
+  return (items || [])
+    .filter(item => item?.role === 'user' || item?.role === 'assistant')
+    .filter(item => !item?.metadata?.transient_persona_apply)
+    .map(item => ({
+      role: item.role,
+      content: String(item.content || '').trim(),
+    }))
+    .filter(item => item.content)
+}
 
 export default function App() {
   const [backendUrl, setBackendUrl] = useState(() => window.env?.BACKEND_URL || 'http://127.0.0.1:8000')
-  const [userId, setUserId] = useState('user1')
+  const userId = DEFAULT_USER_ID
   const [providerSettings, setProviderSettings] = useState(DEFAULT_PROVIDER_SETTINGS)
   const [providerDraft, setProviderDraft] = useState({
     api_base_url: '',
     api_key: '',
-    companion_persona_prompt: '',
   })
   const [savingProvider, setSavingProvider] = useState(false)
   const [sessionId] = useState('default')
   const [chatThreads, setChatThreads] = useState(() => [createChatThread('chat_default')])
   const [activeThreadId, setActiveChatThreadId] = useState('chat_default')
+  const [personas, setPersonas] = useState([])
+  const [personasLoading, setPersonasLoading] = useState(false)
+  const [selectedPersonaId, setSelectedPersonaId] = useState('')
+  const [personaApplyRequest, setPersonaApplyRequest] = useState(null)
   const [courses, setCourses] = useState([])
   const [coursesLoading, setCoursesLoading] = useState(false)
   const [projectThreads, setProjectThreads] = useState({})
@@ -62,7 +90,6 @@ export default function App() {
   const [selectedAudioOutput, setSelectedAudioOutput] = useState('')
   // TTS 朗读开关
   const [ttsEnabled, setTtsEnabled] = useState(false)
-  const [isMaximized, setIsMaximized] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalSessions, setTerminalSessions] = useState([])
   const [activeTerminalId, setActiveTerminalId] = useState('')
@@ -75,8 +102,12 @@ export default function App() {
     } catch { return 292 }
   })
   const [workspaceSidebarResizing, setWorkspaceSidebarResizing] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar_collapsed_v1') === 'true' } catch { return false }
+  })
   const [showCreateProjectDialog, setShowCreateProjectDialog] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
+  const [pdfViewActive, setPdfViewActive] = useState(false)
 
   const appRef = useRef(null)
   const messagesEndRef = useRef(null)
@@ -92,11 +123,11 @@ export default function App() {
   const { listening, startListening, stopListening } = useSpeechInput(backendUrl, selectedAudioInput)
 
   const threadStoreKey = useMemo(
-    () => `${THREAD_KEY_PREFIX}${userId || 'user1'}`,
+    () => `${THREAD_KEY_PREFIX}${userId || DEFAULT_USER_ID}`,
     [userId],
   )
   const projectThreadStoreKey = useMemo(
-    () => `${PROJECT_THREAD_KEY_PREFIX}${userId || 'user1'}`,
+    () => `${PROJECT_THREAD_KEY_PREFIX}${userId || DEFAULT_USER_ID}`,
     [userId],
   )
   const activeThread = useMemo(
@@ -105,8 +136,14 @@ export default function App() {
   )
   const messages = activeThread?.messages || []
   const sortedThreads = useMemo(
-    () => [...chatThreads].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)),
+    () => [...chatThreads]
+      .filter(thread => thread.type !== 'persona')
+      .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)),
     [chatThreads],
+  )
+  const selectedPersona = useMemo(
+    () => personas.find(item => item.id === selectedPersonaId) || null,
+    [personas, selectedPersonaId],
   )
   const activeCourseId = activeCourse ? String(activeCourse.course_id) : ''
   const activeProjectThreads = activeCourseId ? (projectThreads[activeCourseId] || []) : []
@@ -122,12 +159,29 @@ export default function App() {
     () => terminalSessions.find(x => x.sessionId === activeTerminalId) || terminalSessions[0] || null,
     [terminalSessions, activeTerminalId],
   )
+  const prevTerminalHeightRef = useRef(320)
+
+  function onPdfViewChange(active) {
+    setPdfViewActive(active)
+    if (active) {
+      prevTerminalHeightRef.current = terminalHeight > 0 ? terminalHeight : prevTerminalHeightRef.current
+      setSidebarCollapsed(true)
+    } else {
+      setSidebarCollapsed(false)
+      setTerminalHeight(prevTerminalHeightRef.current)
+      setTimeout(() => {
+        if (activeCourse && !terminalSessions.some(s => s.status !== 'exited' && s.cwd === activeCourse.project_path)) {
+          createProjectTerminal({ forceNew: false })
+        }
+      }, 150)
+    }
+  }
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem(threadStoreKey)
       const parsed = raw ? JSON.parse(raw) : []
-      const normalized = normalizeChatThreads(parsed)
+      const normalized = normalizeChatThreads(parsed).filter(thread => thread.type !== 'persona')
       if (normalized.length > 0) {
         setChatThreads(normalized)
         setActiveChatThreadId(normalized[0].id)
@@ -245,6 +299,10 @@ export default function App() {
   }, [workspaceSidebarWidth])
 
   useEffect(() => {
+    try { localStorage.setItem('sidebar_collapsed_v1', String(sidebarCollapsed)) } catch (e) { void e }
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
     if (!workspaceSidebarResizing) return
     const onMove = (e) => {
       const rect = appRef.current?.getBoundingClientRect()
@@ -266,41 +324,56 @@ export default function App() {
 
   const loadProviderSettings = useCallback(async (showErrors = false) => {
     try {
-      const res = await getProviderSettingsApi(backendUrl)
+      const res = await getProviderSettingsApi(backendUrl, userId)
       const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
       setProviderSettings(provider)
       setProviderDraft({
         api_base_url: provider.api_base_url || '',
         api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
-        companion_persona_prompt: provider.companion_persona_prompt || provider.default_companion_persona_prompt || '',
       })
     } catch (e) {
       if (showErrors) showToast('模型 API 设置读取失败: ' + (e?.message || e), 'error')
     }
-  }, [backendUrl, showToast])
+  }, [backendUrl, userId, showToast])
 
   useEffect(() => {
     loadProviderSettings(false)
   }, [loadProviderSettings])
 
+  const loadPersonas = useCallback(async (showErrors = false) => {
+    setPersonasLoading(true)
+    try {
+      const res = await listPersonasApi(backendUrl)
+      setPersonas(Array.isArray(res.items) ? res.items : [])
+    } catch (e) {
+      if (showErrors) showToast('读取陪伴人设失败: ' + (e?.message || e), 'error')
+      setPersonas([])
+    } finally {
+      setPersonasLoading(false)
+    }
+  }, [backendUrl, showToast])
+
+  useEffect(() => {
+    loadPersonas(false)
+  }, [loadPersonas])
+
   async function saveProviderSettings() {
     setSavingProvider(true)
     try {
       const payload = {
+        user_id: userId,
         api_base_url: String(providerDraft.api_base_url || '').trim(),
       }
       const keyText = String(providerDraft.api_key || '')
       if (keyText !== MASKED_KEY_VALUE) {
         payload.api_key = keyText.trim()
       }
-      payload.companion_persona_prompt = String(providerDraft.companion_persona_prompt || '').trim()
       const res = await updateProviderSettingsApi(backendUrl, payload)
       const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(res.provider || {}) }
       setProviderSettings(provider)
       setProviderDraft({
         api_base_url: provider.api_base_url || '',
         api_key: provider.has_api_key ? MASKED_KEY_VALUE : '',
-        companion_persona_prompt: provider.companion_persona_prompt || provider.default_companion_persona_prompt || '',
       })
       showToast('模型 API 设置已保存', 'success')
     } catch (e) {
@@ -400,6 +473,8 @@ export default function App() {
     setInput('')
     setPendingImages([])
     setLastLatency(null)
+    setSidebarCollapsed(false)
+    setTimeout(() => createProjectTerminal({}), 100)
   }
 
   function newProjectThread(course) {
@@ -412,6 +487,8 @@ export default function App() {
     setInput('')
     setPendingImages([])
     setLastLatency(null)
+    setSidebarCollapsed(false)
+    setTimeout(() => createProjectTerminal({}), 100)
   }
 
   function closeProjectThread(courseId, threadId) {
@@ -482,6 +559,181 @@ export default function App() {
     setLastLatency(null)
   }
 
+  async function applyPersonaToCurrentChat(persona) {
+    const prompt = String(persona?.content || '').trim()
+    if (!persona?.id || !prompt) {
+      showToast('这个人设 md 还没有可用内容', 'error')
+      return
+    }
+    setSelectedPersonaId(persona.id)
+
+    if (page === 'course_chat') {
+      if (!activeCourse || !activeProjectThread) {
+        showToast('当前没有可处理的项目对话', 'error')
+        return
+      }
+      setPersonaApplyRequest({
+        id: `persona-apply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        persona,
+      })
+      return
+    }
+
+    if (loading) {
+      showToast('当前对话正在生成，稍后再应用人设', 'error')
+      return
+    }
+
+    let sourceMessages = messages
+    if (pureConversationMessages(sourceMessages).length === 0) {
+      try {
+        const res = await getChatSessionApi(backendUrl, activeThreadId, userId)
+        const stored = Array.isArray(res.messages) ? res.messages : []
+        const visibleMessages = stored.filter(m => m?.role === 'user' || m?.role === 'assistant')
+        if (visibleMessages.length > 0) {
+          sourceMessages = visibleMessages
+          setMessages(visibleMessages)
+        }
+      } catch (e) {
+        void e
+      }
+    }
+
+    const cleanMessages = pureConversationMessages(sourceMessages)
+    if (cleanMessages.length === 0) {
+      showToast('当前会话还没有用户/AI 对话可处理', 'error')
+      return
+    }
+
+    const assistantId = `persona-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const patchAssistant = updater => {
+      setMessages(prev => prev.map(item => {
+        if (item.id !== assistantId) return item
+        const patch = typeof updater === 'function' ? updater(item) : updater
+        return { ...item, ...patch }
+      }))
+    }
+
+    setActiveCourse(null)
+    setPage('chat')
+    setInput('')
+    setPendingImages([])
+    setLoading(true)
+    setLastLatency(null)
+    setMessages(prev => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        refs: [],
+        activity: [],
+        usage: { pending: true, output_tokens_estimate: 0 },
+        model: '',
+        streaming: true,
+        created_at: new Date().toISOString(),
+        metadata: {
+          persona_id: persona.id,
+          persona_name: persona.name || persona.id,
+          transient_persona_apply: true,
+        },
+      },
+    ])
+
+    try {
+      let doneReceived = false
+      let replyText = ''
+      let latestUsage = null
+      const resp = await personaApplyStreamApi(backendUrl, {
+        user_id: userId,
+        session_id: activeThreadId,
+        persona_prompt: prompt,
+        messages: cleanMessages,
+        persist_to_session: true,
+      }, {
+        onDelta: (_delta, fullText) => {
+          replyText = fullText
+          patchAssistant(item => ({
+            content: fullText,
+            usage: item.usage?.pending
+              ? { ...item.usage, output_tokens_estimate: estimateOutputTokens(fullText) }
+              : item.usage,
+            streaming: true,
+          }))
+        },
+        onUsage: usage => {
+          latestUsage = usage
+          patchAssistant({ usage })
+        },
+        onDone: done => {
+          doneReceived = true
+          replyText = done.reply || replyText
+          latestUsage = done.usage || latestUsage
+          patchAssistant({
+            content: replyText,
+            usage: latestUsage || null,
+            model: done.model || '',
+            streaming: false,
+            completed_at: new Date().toISOString(),
+          })
+          if (done.latency_ms) setLastLatency(done.latency_ms)
+        },
+      })
+      if (!doneReceived) {
+        replyText = resp.reply || replyText
+        patchAssistant({
+          content: replyText,
+          usage: latestUsage || null,
+          model: resp.model || '',
+          streaming: false,
+          completed_at: new Date().toISOString(),
+        })
+      }
+      if (resp.latency_ms) setLastLatency(resp.latency_ms)
+    } catch (err) {
+      patchAssistant({
+        content: '人设处理失败：' + (err?.message || err),
+        refs: [],
+        usage: null,
+        streaming: false,
+      })
+      showToast('人设处理失败', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function createPersonaFromSidebar() {
+    const name = window.prompt('新建人设 md 名称:', '新的陪伴人设')
+    const text = String(name || '').trim()
+    if (!text) return
+    try {
+      const created = await createPersonaApi(backendUrl, {
+        name: text,
+        content: `# ${text}\n\n写下这个 agent 的人设、语气、边界和工作方式。\n`,
+      })
+      await loadPersonas(false)
+      setSelectedPersonaId(created.id || '')
+      showToast('人设 md 已创建，点击它即可处理当前对话', 'success')
+    } catch (e) {
+      showToast('创建人设失败: ' + (e?.message || e), 'error')
+    }
+  }
+
+  async function importPersonaFromSidebar(file) {
+    if (!file) return
+    try {
+      const content = await file.text()
+      const name = String(file.name || '导入人设').replace(/\.md$/i, '')
+      const created = await createPersonaApi(backendUrl, { name, content })
+      await loadPersonas(false)
+      setSelectedPersonaId(created.id || '')
+      showToast('人设 md 已导入，点击它即可处理当前对话', 'success')
+    } catch (e) {
+      showToast('导入人设失败: ' + (e?.message || e), 'error')
+    }
+  }
+
   function upsertTerminalSession(session) {
     if (!session?.sessionId) return
     if (typeof session.buffer === 'string') {
@@ -538,14 +790,12 @@ export default function App() {
     if (!forceNew) {
       const existing = terminalSessions.find(x => x.cwd === projectPath && x.status !== 'exited')
       if (existing) {
-        setTerminalOpen(true)
         setActiveTerminalId(existing.sessionId)
         return existing
       }
     }
 
     try {
-      setTerminalOpen(true)
       const res = await window.windowApi.openPowerShell(projectPath, {
         cols: xtermRef.current?.cols || 120,
         rows: xtermRef.current?.rows || 30,
@@ -667,14 +917,6 @@ export default function App() {
     ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'
   }, [input])
 
-  // 监听窗口最大化状态变化
-  useEffect(() => {
-    if (!window.windowApi) return
-    window.windowApi.isMaximized().then(v => setIsMaximized(v))
-    const unsub = window.windowApi.onStateChanged((isMax) => setIsMaximized(isMax))
-    return () => { if (typeof unsub === 'function') unsub() }
-  }, [])
-
   useEffect(() => {
     if (!window.windowApi?.onTerminalEvent) return
     const unsub = window.windowApi.onTerminalEvent((event) => {
@@ -744,26 +986,26 @@ export default function App() {
       lineHeight: 1.2,
       scrollback: 10000,
       theme: {
-        background: '#101418',
-        foreground: '#d6e2ee',
-        cursor: '#d6e2ee',
-        selectionBackground: '#31576f',
-        black: '#1f2428',
-        red: '#f97583',
-        green: '#85e89d',
-        yellow: '#ffea7f',
-        blue: '#79b8ff',
-        magenta: '#b392f0',
-        cyan: '#56d4dd',
+        background: '#ffffff',
+        foreground: '#1a1a2e',
+        cursor: '#1a1a2e',
+        selectionBackground: '#cce5ff',
+        black: '#1a1a2e',
+        red: '#d73a49',
+        green: '#22863a',
+        yellow: '#735c0f',
+        blue: '#005cc5',
+        magenta: '#6f42c1',
+        cyan: '#1b7c83',
         white: '#d1d5da',
         brightBlack: '#586069',
-        brightRed: '#f97583',
-        brightGreen: '#85e89d',
-        brightYellow: '#ffea7f',
-        brightBlue: '#79b8ff',
-        brightMagenta: '#b392f0',
-        brightCyan: '#56d4dd',
-        brightWhite: '#f6f8fa',
+        brightRed: '#d73a49',
+        brightGreen: '#22863a',
+        brightYellow: '#735c0f',
+        brightBlue: '#005cc5',
+        brightMagenta: '#6f42c1',
+        brightCyan: '#1b7c83',
+        brightWhite: '#24292e',
       },
     })
     const fitAddon = new FitAddon()
@@ -874,6 +1116,14 @@ export default function App() {
 
   async function handleSend() {
     const text = input.trim()
+
+    const cmd = trySlashCommand(input)
+    if (cmd.handled) {
+      setInput('')
+      showToast(cmd.message, 'info')
+      return
+    }
+
     if (!text && pendingImages.length === 0) return
     const imgs = [...pendingImages]
     const userMsg = { role: 'user', content: text, created_at: new Date().toISOString() }
@@ -902,10 +1152,14 @@ export default function App() {
     ])
     setInput(''); setPendingImages([]); setLoading(true); setLastLatency(null)
     try {
+      const rtFlags = loadRuntimeFlags()
       const payload = {
         user_id: userId,
         session_id: activeThreadId,
         messages: [userMsg],
+        thinking_enabled: rtFlags.thinking_enabled,
+        subagent_enabled: rtFlags.subagent_enabled,
+        function_calling_enabled: rtFlags.fc_enabled,
       }
       // 有图片时：把第一张 base64 作为 image_url 发给后端
       if (imgs.length > 0) payload.image_url = imgs[0]
@@ -1042,6 +1296,27 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (!window.windowApi?.onAppMenuCommand) return
+    const unsubscribe = window.windowApi.onAppMenuCommand((command) => {
+      if (command === 'new-chat') {
+        newThread()
+      } else if (command === 'toggle-sidebar') {
+        setSidebarCollapsed(v => !v)
+      } else if (command === 'open-current-vscode') {
+        const targetPath = activeCourse?.project_path
+        if (targetPath && window.windowApi?.openInVSCode) {
+          window.windowApi.openInVSCode(targetPath).catch(() => {
+            showToast('无法打开 VS Code，请确认 code 命令可用', 'error')
+          })
+        } else {
+          showToast('当前没有可打开的项目', 'error')
+        }
+      }
+    })
+    return () => { if (typeof unsubscribe === 'function') unsubscribe() }
+  }, [activeCourse?.project_path, showToast])
+
   const canSend = (input.trim() || pendingImages.length > 0) && !loading
 
   if (IS_TERMINAL_WINDOW) {
@@ -1061,16 +1336,25 @@ export default function App() {
     <div className={`app${workspaceSidebarResizing ? ' is-resizing' : ''}`} ref={appRef}>
       <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       <Workspace
-        width={workspaceSidebarWidth}
-        userId={userId}
+        width={sidebarCollapsed ? 0 : workspaceSidebarWidth}
+        collapsed={sidebarCollapsed}
         page={page}
         activeThreadId={activeThreadId}
+        activePersonaId={selectedPersonaId}
         sortedThreads={sortedThreads}
         onNewThread={newThread}
         onOpenThread={openThread}
         onDeleteThread={deleteThread}
+        onRenameThread={(threadId, newTitle) => {
+          setChatThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle } : t))
+        }}
         courses={courses}
         coursesLoading={coursesLoading}
+        personas={personas}
+        personasLoading={personasLoading}
+        onApplyPersona={applyPersonaToCurrentChat}
+        onCreatePersona={createPersonaFromSidebar}
+        onImportPersona={importPersonaFromSidebar}
         projectThreads={projectThreads}
         activeCourse={activeCourse}
         activeProjectThreadId={activeProjectThreadId}
@@ -1079,42 +1363,57 @@ export default function App() {
         onOpenProject={openProject}
         onNewProjectThread={newProjectThread}
         onDeleteProjectThread={deleteProjectThread}
+        onRenameProjectThread={(courseId, threadId, newTitle) => {
+          updateProjectThreadTitle(courseId, threadId, newTitle)
+        }}
         onDeleteProject={deleteProject}
+        onRenameProject={async (courseId, newName) => {
+          try {
+            await updateCourseApi(backendUrl, courseId, { name: newName })
+            setCourses(prev => prev.map(c => String(c.course_id) === String(courseId) ? { ...c, name: newName } : c))
+            showToast('项目已重命名', 'success')
+          } catch (e) {
+            showToast('重命名失败: ' + (e?.message || e), 'error')
+          }
+        }}
         onPage={setPage}
+        onToggleCollapse={() => setSidebarCollapsed(v => !v)}
       />
-      <div
-        className="workspace-sidebar-resizer"
-        onMouseDown={(e) => { e.preventDefault(); setWorkspaceSidebarResizing(true) }}
-      />
+      <div className="sidebar-toggle-bar">
+        <button
+          className="sidebar-toggle-btn"
+          onClick={() => setSidebarCollapsed(v => !v)}
+          title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+        >
+          {sidebarCollapsed ? '▶' : '◀'}
+        </button>
+        {!sidebarCollapsed && (
+          <div
+            className="workspace-sidebar-resizer"
+            onMouseDown={(e) => { e.preventDefault(); setWorkspaceSidebarResizing(true) }}
+          />
+        )}
+      </div>
       <div className="main">
         <div className="topbar">
           <span className="topbar-title">
             {page==='course_chat' ? (activeCourse?.name || '项目对话') : page==='chat' ? '无项目对话' : '设置'}
           </span>
-          {page==='course_chat' && activeProjectThread && <span className="topbar-tag">{activeProjectThread.title || THREAD_DEFAULT_TITLE}</span>}
+          {page==='chat' && selectedPersona && <span className="topbar-tag">选中人设：{selectedPersona.name}</span>}
           <div className="topbar-spacer"/>
-          {page==='course_chat' && activeCourse && (
+          {page==='course_chat' && activeCourse?.project_path && window.windowApi?.openInVSCode && (
             <button
-              title={activeCourse.project_path ? `打开项目终端：${activeCourse.project_path}` : '打开项目终端'}
-              onClick={openProjectTerminal}
-              className={`ghost-btn small topbar-terminal-btn${terminalOpen ? ' active' : ''}`}
+              title={`在 VS Code 中打开 ${activeCourse.project_path}`}
+              onClick={() => window.windowApi.openInVSCode(activeCourse.project_path)}
+              className="ghost-btn small topbar-vscode-btn"
             >
-              <TerminalIcon />
-              <span>CLI</span>
+              <span>VS Code</span>
             </button>
           )}
           {page==='chat' && (
             <span className={`topbar-status ${loading?'loading':''}`}>
               {loading ? '生成中…' : lastLatency ? `${lastLatency}ms` : '就绪'}
             </span>
-          )}
-          {window.windowApi && (
-            <button
-              title={isMaximized ? '还原窗口' : '最大化'}
-              onClick={() => window.windowApi.maximizeToggle()}
-              className="ghost-btn small"
-              style={{WebkitAppRegion:'no-drag',padding:'3px 8px',fontSize:14}}
-            >{isMaximized ? '⤡' : '□'}</button>
           )}
         </div>
 
@@ -1143,50 +1442,59 @@ export default function App() {
         )}
 
         {page==='course_chat' && activeCourse && activeProjectThread && (
-          <div className="course-chat-shell">
-            <CourseChatPage
-              key={`${activeCourse.course_id}:${activeProjectThread.id}`}
-              course={activeCourse}
-              backendUrl={backendUrl}
-              userId={userId}
-              sessionId={activeProjectThread.id}
-              showToast={showToast}
-              onBack={() => setPage('chat')}
-              onThreadTitleChange={updateProjectThreadTitle}
-              projectThreads={activeProjectThreads}
-              activeThreadId={activeProjectThread.id}
-              onOpenThread={(threadId) => openProject(activeCourse, threadId)}
-              onNewThread={() => newProjectThread(activeCourse)}
-              onCloseThread={(threadId) => closeProjectThread(activeCourse.course_id, threadId)}
-              onInteractiveTerminalCommand={runProjectCommandInTerminal}
-            />
+          <div className="project-workspace">
+            <div className="project-chat-area">
+              <CourseChatPage
+                key={`${activeCourse.course_id}:${activeProjectThread.id}`}
+                course={activeCourse}
+                backendUrl={backendUrl}
+                userId={userId}
+                sessionId={activeProjectThread.id}
+                showToast={showToast}
+                onBack={() => setPage('chat')}
+                onThreadTitleChange={updateProjectThreadTitle}
+                projectThreads={activeProjectThreads}
+                activeThreadId={activeProjectThread.id}
+                personaApplyRequest={personaApplyRequest}
+                onPdfViewChange={onPdfViewChange}
+                onOpenThread={(threadId) => openProject(activeCourse, threadId)}
+                onNewThread={() => newProjectThread(activeCourse)}
+                onCloseThread={(threadId) => closeProjectThread(activeCourse.course_id, threadId)}
+                onInteractiveTerminalCommand={runProjectCommandInTerminal}
+              />
+            </div>
+            {activeCourse && !pdfViewActive && (
+              <>
+                <div
+                  className="project-split-resizer"
+                  onMouseDown={(e) => { e.preventDefault(); startTerminalResize(e) }}
+                />
+                <div className="project-terminal-pane" style={{ height: terminalHeight }}>
+                  <TerminalDock
+                    activeCourse={activeCourse}
+                    activeTerminal={activeTerminal}
+                    sessions={terminalSessions}
+                    height={terminalHeight}
+                    resizing={terminalResizing}
+                    screenRef={terminalContainerRef}
+                    onResizeStart={startTerminalResize}
+                    onDragTitle={startTerminalPopoutDrag}
+                    onSelect={setActiveTerminalId}
+                    onNew={newProjectTerminal}
+                    onPopout={popoutTerminal}
+                    onCollapse={null}
+                    onClose={closeProjectTerminal}
+                  />
+                </div>
+              </>
+            )}
           </div>
-        )}
-
-        {page==='course_chat' && activeCourse && terminalOpen && (
-          <TerminalDock
-            activeCourse={activeCourse}
-            activeTerminal={activeTerminal}
-            sessions={terminalSessions}
-            height={terminalHeight}
-            resizing={terminalResizing}
-            screenRef={terminalContainerRef}
-            onResizeStart={startTerminalResize}
-            onDragTitle={startTerminalPopoutDrag}
-            onSelect={setActiveTerminalId}
-            onNew={newProjectTerminal}
-            onPopout={popoutTerminal}
-            onCollapse={() => setTerminalOpen(false)}
-            onClose={closeProjectTerminal}
-          />
         )}
 
         {page==='settings' && (
           <Settings
             backendUrl={backendUrl}
             setBackendUrl={setBackendUrl}
-            userId={userId}
-            setUserId={setUserId}
             providerDraft={providerDraft}
             setProviderDraft={setProviderDraft}
             providerSettings={providerSettings}

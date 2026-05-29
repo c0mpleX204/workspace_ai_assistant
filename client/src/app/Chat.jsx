@@ -22,7 +22,7 @@ export function Message({ m, onImageClick, onTts }) {
           </button>
         )}
       </div>
-      <div className="msg-bubble">
+      <div className="msg-body">
         {m.images && m.images.length > 0 && (
           <div className="msg-images">
             {m.images.map((src, i) => (
@@ -37,7 +37,7 @@ export function Message({ m, onImageClick, onTts }) {
             ))}
           </div>
         )}
-        {contentText ? <span>{contentText}</span> : (m.streaming ? <span className="streaming-placeholder">正在生成...</span> : null)}
+        {contentText ? <div className="msg-text">{contentText}</div> : (m.streaming ? <span className="streaming-placeholder">正在生成...</span> : null)}
       </div>
       {m.role === 'assistant' && m.refs && m.refs.length > 0 && (
         <div className="refs">{m.refs.map((ref, i) => (

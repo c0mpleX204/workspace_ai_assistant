@@ -141,6 +141,7 @@ class ChatRequest(BaseModel):
     user_id: str = "default_user"
     session_id: str = "default"
     messages: List[ChatMessage] = Field(min_length=1)
+    persona_prompt: Optional[str] = None
     use_retrieval: bool = False
     document_id: Optional[int] = None
     document_ids: Optional[List[int]] = None
@@ -149,6 +150,9 @@ class ChatRequest(BaseModel):
     files: Optional[List[UploadFile]] = None
     image_url: Optional[str] = None
     audio_url: Optional[str] = None
+    thinking_enabled: Optional[bool] = None
+    subagent_enabled: Optional[bool] = None
+    function_calling_enabled: Optional[bool] = None
 
 
 class ReferenceItem(BaseModel):
@@ -183,6 +187,32 @@ class ChatResponse(BaseModel):
     model: Optional[str] = None
 
 
+class PersonaItem(BaseModel):
+    id: str
+    name: str
+    content: str = ""
+    path: str = ""
+    updated_at: Optional[float] = None
+
+
+class PersonaListResponse(BaseModel):
+    items: List[PersonaItem] = Field(default_factory=list)
+    total: int = 0
+
+
+class PersonaSaveRequest(BaseModel):
+    name: str = Field(min_length=1)
+    content: str = ""
+
+
+class PersonaApplyRequest(BaseModel):
+    user_id: str = "default_user"
+    session_id: str = ""
+    persona_prompt: str = Field(min_length=1)
+    messages: List[ChatMessage] = Field(default_factory=list)
+    persist_to_session: bool = False
+
+
 class AgentRunRequest(BaseModel):
     user_id: str = "default_user"
     session_id: str = "default"
@@ -194,6 +224,9 @@ class AgentRunRequest(BaseModel):
     image_url: Optional[str] = None
     audio_url: Optional[str] = None
     mode: str = "plan_then_act"
+    thinking_enabled: Optional[bool] = None
+    subagent_enabled: Optional[bool] = None
+    function_calling_enabled: Optional[bool] = None
 
 
 class AgentRunStateResponse(BaseModel):
@@ -251,6 +284,6 @@ class TTSRequest(BaseModel):
 
 
 class ProviderConfigUpdateRequest(BaseModel):
+    user_id: Optional[str] = None
     api_base_url: Optional[str] = None
     api_key: Optional[str] = None
-    companion_persona_prompt: Optional[str] = None

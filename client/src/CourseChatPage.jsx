@@ -3,41 +3,52 @@ import {
   listMaterialsApi,
   uploadMaterialApi,
   agentRunStreamApi,
+  personaApplyStreamApi,
   getMaterialViewUrl,
   getChatSessionApi,
   listWorkspaceFilesApi,
-  readWorkspaceFileApi,
-  saveWorkspaceFileApi,
   createWorkspaceFileApi,
   createWorkspaceDirectoryApi,
   deleteWorkspaceFileApi,
   deleteWorkspaceDirectoryApi,
   renameWorkspaceItemApi,
+  getWorkspaceFileRawUrl,
 } from './api'
 import { Message, TypingIndicator } from './course/Dialog'
 import {
-  AttachTreeNode,
   FileTreeNode,
+  AttachTreeNode,
   collectWorkspaceFiles,
   compactOneLine,
   countTextLines,
-  findWorkspaceNode,
-  lineOffset,
 } from './course/Files'
-import OperationPanel from './course/Operations'
-import {
-  ATTACH_CONTEXT_FILE_CHARS,
-  ATTACH_CONTEXT_MAX_CHARS,
-  ATTACH_CONTEXT_MAX_FILES,
-  PASTED_TEXT_CHAR_THRESHOLD,
-  PASTED_TEXT_CONTEXT_MAX_CHARS,
-  PASTED_TEXT_LINE_THRESHOLD,
-  SELECTED_TEXT_CONTEXT_MAX_CHARS,
-  buildThreadTitle,
-} from './course/context'
 import { estimateOutputTokens, fileNameFromPath, fileToDataUrl } from './shared/text'
+import { loadRuntimeFlags, trySlashCommand } from './shared/slashCommands'
 
-const PdfViewer = React.lazy(() => import('./shared/PdfViewer'))
+import PdfViewer from './shared/PdfViewer'
+
+const PASTED_TEXT_LINE_THRESHOLD = 4
+const PASTED_TEXT_CHAR_THRESHOLD = 900
+const PASTED_TEXT_CONTEXT_MAX_CHARS = 60000
+
+function normalizePathForMatch(value) {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+/, '')
+    .toLowerCase()
+}
+
+function pureConversationMessages(items) {
+  return (items || [])
+    .filter(item => item?.role === 'user' || item?.role === 'assistant')
+    .filter(item => !item?.metadata?.transient_persona_apply)
+    .map(item => ({
+      role: item.role,
+      content: String(item.content || '').trim(),
+    }))
+    .filter(item => item.content)
+}
 
 
 export default function CourseChatPage({
@@ -53,7 +64,9 @@ export default function CourseChatPage({
   onOpenThread,
   onNewThread,
   onCloseThread,
+  onPdfViewChange,
   onInteractiveTerminalCommand,
+  personaApplyRequest,
 }) {
   const [materials, setMaterials] = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
@@ -66,7 +79,7 @@ export default function CourseChatPage({
   const [isDragging, setIsDragging] = useState(false)
   const [fileTreeDragOver, setFileTreeDragOver] = useState(false)
   const [importingFiles, setImportingFiles] = useState(false)
-  const [rootCreating, setRootCreating] = useState(null) // 'file' | 'folder' | null
+  const [rootCreating, setRootCreating] = useState(null)
   const [rootCreateValue, setRootCreateValue] = useState('')
   const [fileTreeContextMenu, setFileTreeContextMenu] = useState(null)
   const [uploadState, setUploadState] = useState({ title: '', file: null })
@@ -78,35 +91,33 @@ export default function CourseChatPage({
       return Math.max(220, Math.min(560, value))
     } catch { return 320 }
   })
-  const [opsPaneWidth, setOpsPaneWidth] = useState(() => {
-    try {
-      const value = Number(localStorage.getItem('project_ops_pane_width_v1') || 380) || 380
-      return Math.max(260, Math.min(680, value))
-    } catch { return 380 }
-  })
   const [resizing, setResizing] = useState(null)
-  const [workspacePage, setWorkspacePage] = useState('chat')
   const [workspaceRoot, setWorkspaceRoot] = useState('')
   const [workspaceTree, setWorkspaceTree] = useState([])
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
-  const [openFiles, setOpenFiles] = useState([])
-  const [activeFilePath, setActiveFilePath] = useState('')
-  const [fileLoading, setFileLoading] = useState(false)
-  const [fileSaving, setFileSaving] = useState(false)
-  const [attachPickerOpen, setAttachPickerOpen] = useState(false)
-  const [attachedWorkspaceItems, setAttachedWorkspaceItems] = useState([])
-  const [selectedTextContext, setSelectedTextContext] = useState(null)
   const [pastedTextItems, setPastedTextItems] = useState([])
-  const [pendingLineTarget, setPendingLineTarget] = useState(null)
+  const [showFilePicker, setShowFilePicker] = useState(false)
+  const [filePickerSelected, setFilePickerSelected] = useState(new Set())
+  const [attachedFiles, setAttachedFiles] = useState([])
   const [previewPageNo, setPreviewPageNo] = useState(null)
+  const [pdfView, setPdfView] = useState({ active: false, docId: null, url: '', initialPage: 1, threadId: '' })
+
+  function openPdfInline(docId, url, initialPage = 1) {
+    setPdfView({ active: true, docId, url, initialPage, threadId: `pdf_${course.course_id}_${docId}` })
+    onPdfViewChange?.(true)
+  }
+
+  function closePdfInline() {
+    setPdfView({ active: false, docId: null, url: '', initialPage: 1, threadId: '' })
+    onPdfViewChange?.(false)
+  }
 
   const layoutRef = useRef(null)
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
   const composerRef = useRef(null)
-  const attachPickerRef = useRef(null)
-  const editorRef = useRef(null)
   const rootCreatingGuardRef = useRef(false)
+  const personaApplyRequestIdRef = useRef('')
   const chatSessionId = String(sessionId || '').startsWith('course_')
     ? String(sessionId)
     : `course_${course.course_id}_${sessionId || 'default'}`
@@ -114,19 +125,14 @@ export default function CourseChatPage({
   const chatTabs = projectThreads.length
     ? projectThreads
     : [{ id: currentThreadId, title: '新对话' }]
-  const activeFile = openFiles.find(file => file.path === activeFilePath) || openFiles[0] || null
 
   useEffect(() => {
-    setOpenFiles([])
-    setActiveFilePath('')
-    setAttachedWorkspaceItems([])
-    setSelectedTextContext(null)
     setPastedTextItems([])
-    setPendingLineTarget(null)
     setPreviewPageNo(null)
-    setAttachPickerOpen(false)
+    fetchMaterials()
     fetchWorkspaceFiles()
   }, [course.course_id, backendUrl])
+
   useEffect(() => {
     let cancelled = false
     setMessages([])
@@ -148,29 +154,22 @@ export default function CourseChatPage({
     loadChatHistory()
     return () => { cancelled = true }
   }, [backendUrl, chatSessionId, userId])
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
+
+  useEffect(() => {
+    const requestId = personaApplyRequest?.id
+    if (!requestId || personaApplyRequestIdRef.current === requestId) return
+    personaApplyRequestIdRef.current = requestId
+    applyPersonaToProjectChat(personaApplyRequest.persona)
+  }, [personaApplyRequest])
+
   useEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
     ta.style.height = 'auto'
     ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'
   }, [input])
-
-  useEffect(() => {
-    if (!pendingLineTarget || !activeFile || pendingLineTarget.path !== activeFile.path) return
-    const editor = editorRef.current
-    if (!editor) return
-    const start = lineOffset(activeFile.content, pendingLineTarget.lineStart)
-    const endLine = pendingLineTarget.lineEnd || pendingLineTarget.lineStart
-    const end = lineOffset(activeFile.content, endLine + 1)
-    requestAnimationFrame(() => {
-      editor.focus()
-      editor.setSelectionRange(start, Math.max(start, end))
-      const lineHeight = 22
-      editor.scrollTop = Math.max(0, (Number(pendingLineTarget.lineStart || 1) - 4) * lineHeight)
-    })
-    setPendingLineTarget(null)
-  }, [pendingLineTarget, activeFile])
 
   useEffect(() => {
     if (!previewDocId) return
@@ -182,26 +181,6 @@ export default function CourseChatPage({
   }, [previewDocId])
 
   useEffect(() => {
-    if (!attachPickerOpen) return
-    const onPointerDown = (e) => {
-      if (!attachPickerRef.current?.contains(e.target)) setAttachPickerOpen(false)
-    }
-    window.addEventListener('mousedown', onPointerDown)
-    return () => window.removeEventListener('mousedown', onPointerDown)
-  }, [attachPickerOpen])
-
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (workspacePage !== 'files') return
-      if (!(e.ctrlKey || e.metaKey) || String(e.key || '').toLowerCase() !== 's') return
-      e.preventDefault()
-      saveActiveFile()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [workspacePage, activeFilePath, openFiles, fileSaving])
-
-  useEffect(() => {
     if (!resizing) return
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
@@ -211,18 +190,10 @@ export default function CourseChatPage({
       const root = layoutRef.current
       if (!root) return
       const rect = root.getBoundingClientRect()
-
       if (resizing === 'left') {
         const x = e.clientX - rect.left
         const maxLeft = Math.max(280, Math.min(560, rect.width - 560))
         setLeftPaneWidth(Math.max(220, Math.min(maxLeft, x)))
-        return
-      }
-
-      if (resizing === 'ops') {
-        const rightWidth = rect.right - e.clientX
-        const maxRight = Math.max(300, rect.width - leftPaneWidth - 360)
-        setOpsPaneWidth(Math.max(260, Math.min(maxRight, rightWidth)))
       }
     }
 
@@ -248,18 +219,8 @@ export default function CourseChatPage({
   useEffect(() => {
     try {
       localStorage.setItem('project_file_tree_width_v1', String(Math.round(leftPaneWidth)))
-    } catch (e) {
-      void e
-    }
+    } catch (e) { void e }
   }, [leftPaneWidth])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('project_ops_pane_width_v1', String(Math.round(opsPaneWidth)))
-    } catch (e) {
-      void e
-    }
-  }, [opsPaneWidth])
 
   async function fetchMaterials() {
     try {
@@ -284,75 +245,40 @@ export default function CourseChatPage({
     }
   }
 
-  async function openWorkspaceFile(item) {
-    const path = String(item?.path || '')
-    if (!path) return
-    const existing = openFiles.find(file => file.path === path)
-    if (existing) {
-      setActiveFilePath(path)
-      setWorkspacePage('files')
-      return
-    }
-
-    setFileLoading(true)
-    try {
-      const file = await readWorkspaceFileApi(backendUrl, course.course_id, path)
-      setOpenFiles(prev => [...prev, {
-        path: file.path,
-        name: file.name || fileNameFromPath(file.path),
-        content: file.content || '',
-        savedContent: file.content || '',
-        encoding: file.encoding || 'utf-8',
-        size: Number(file.size || 0),
-        modified_at: file.modified_at,
-      }])
-      setActiveFilePath(file.path)
-      setWorkspacePage('files')
-    } catch (e) {
-      showToast('打开文件失败: ' + (e?.message || e), 'error')
-    } finally {
-      setFileLoading(false)
-    }
-  }
-
-  function toWorkspaceRelativePath(path) {
-    const raw = String(path || '').replace(/\\/g, '/')
-    const root = String(workspaceRoot || course.project_path || '').replace(/\\/g, '/').replace(/\/+$/, '')
-    if (root && raw.toLowerCase().startsWith((root + '/').toLowerCase())) {
-      return raw.slice(root.length + 1)
-    }
-    return raw.replace(/^\/+/, '')
-  }
-
-  async function openWorkspacePath(path, lineStart = null, lineEnd = null) {
-    const relPath = toWorkspaceRelativePath(path)
+  function openFileInVSCode(item) {
+    // only used from right-click context menu
+    const relPath = String(item?.path || '')
     if (!relPath) return
-    const existing = openFiles.find(file => file.path === relPath)
-    if (existing) {
-      setActiveFilePath(relPath)
-      setWorkspacePage('files')
-      if (lineStart) setPendingLineTarget({ path: relPath, lineStart, lineEnd: lineEnd || lineStart })
-      return
+    const root = workspaceRoot || course.project_path || ''
+    const fullPath = root ? `${root.replace(/\\/g, '/').replace(/\/+$/, '')}/${relPath}` : relPath
+    if (window.windowApi?.openInVSCode) {
+      window.windowApi.openInVSCode(fullPath).catch(() => {
+        showToast('无法打开 VS Code，请确认已安装并在 PATH 中', 'error')
+      })
+    } else {
+      showToast('VS Code 集成仅在桌面客户端可用', 'error')
     }
-    setFileLoading(true)
-    try {
-      const file = await readWorkspaceFileApi(backendUrl, course.course_id, relPath)
-      setOpenFiles(prev => [...prev, {
-        path: file.path,
-        name: file.name || fileNameFromPath(file.path),
-        content: file.content || '',
-        savedContent: file.content || '',
-        encoding: file.encoding || 'utf-8',
-        size: Number(file.size || 0),
-        modified_at: file.modified_at,
-      }])
-      setActiveFilePath(file.path)
-      setWorkspacePage('files')
-      if (lineStart) setPendingLineTarget({ path: file.path, lineStart, lineEnd: lineEnd || lineStart })
-    } catch (e) {
-      showToast('打开引用文件失败: ' + (e?.message || e), 'error')
-    } finally {
-      setFileLoading(false)
+  }
+
+  function handleFileClick(item) {
+    if (!item || item.type === 'directory') return
+    const name = String(item.name || '')
+    const relPath = String(item.path || '')
+    if (!relPath) return
+    if (name.toLowerCase().endsWith('.pdf')) {
+      const normalizedRel = normalizePathForMatch(relPath)
+      const indexedMaterial = materials.find(mat => {
+        if (String(mat.file_type || '').toLowerCase() !== 'pdf') return false
+        const source = normalizePathForMatch(mat.source_path)
+        return source === normalizedRel || source.endsWith(`/${normalizedRel}`)
+      })
+      if (indexedMaterial?.document_id) {
+        openPdfInline(Number(indexedMaterial.document_id), getMaterialViewUrl(backendUrl, Number(indexedMaterial.document_id)), 1)
+      } else {
+        const url = getWorkspaceFileRawUrl(backendUrl, course.course_id, relPath)
+        const docId = 'ws_' + encodeURIComponent(relPath)
+        openPdfInline(docId, url, 1)
+      }
     }
   }
 
@@ -361,7 +287,6 @@ export default function CourseChatPage({
     const kind = ref?.type || target.kind
     const sourcePath = target.path || target.source_path || ref?.source_path || ''
     const lineStart = target.line_start || ref?.line_start
-    const lineEnd = target.line_end || ref?.line_end || lineStart
     const documentId = target.document_id || ref?.document_id
     const pageNo = target.page_no || ref?.page_no || null
     const url = target.url || (kind === 'web' ? sourcePath : '')
@@ -372,37 +297,30 @@ export default function CourseChatPage({
     }
 
     if ((kind === 'code' || kind === 'text' || lineStart) && sourcePath) {
-      openWorkspacePath(sourcePath, lineStart, lineEnd)
+      const root = workspaceRoot || course.project_path || ''
+      const fullPath = root ? `${root.replace(/\\/g, '/').replace(/\/+$/, '')}/${sourcePath}` : sourcePath
+      if (window.windowApi?.openInVSCode) {
+        window.windowApi.openInVSCode(fullPath).catch(() => {})
+      }
       return
     }
     if (documentId) {
-      setPreviewDocId(Number(documentId))
-      setPreviewPageNo(pageNo ? Number(pageNo) : null)
+      const mat = materials.find(m => m.document_id === Number(documentId))
+      if (mat?.file_type === 'pdf') {
+        openPdfInline(Number(documentId), getMaterialViewUrl(backendUrl, Number(documentId)), pageNo ? Number(pageNo) : 1)
+      } else {
+        setPreviewDocId(Number(documentId))
+        setPreviewPageNo(pageNo ? Number(pageNo) : null)
+      }
       return
     }
     if (sourcePath) {
-      openWorkspacePath(sourcePath, lineStart, lineEnd)
+      const root = workspaceRoot || course.project_path || ''
+      const fullPath = root ? `${root.replace(/\\/g, '/').replace(/\/+$/, '')}/${sourcePath}` : sourcePath
+      if (window.windowApi?.openInVSCode) {
+        window.windowApi.openInVSCode(fullPath).catch(() => {})
+      }
     }
-  }
-
-  function closeWorkspaceFile(path, e) {
-    e?.stopPropagation?.()
-    const closingFile = openFiles.find(file => file.path === path)
-    if (closingFile && closingFile.content !== closingFile.savedContent) {
-      const ok = window.confirm(`${closingFile.name || fileNameFromPath(path)} 还有未保存的修改，确定关闭吗？`)
-      if (!ok) return
-    }
-    const nextFiles = openFiles.filter(file => file.path !== path)
-    setOpenFiles(nextFiles)
-    if (activeFilePath === path) {
-      setActiveFilePath(nextFiles[0]?.path || '')
-      if (nextFiles.length === 0) setWorkspacePage('chat')
-    }
-  }
-
-  function openChatTab(threadId) {
-    setWorkspacePage('chat')
-    if (threadId && threadId !== currentThreadId) onOpenThread?.(threadId)
   }
 
   function closeChatTab(threadId, e) {
@@ -414,139 +332,87 @@ export default function CourseChatPage({
     }
   }
 
-  function updateActiveFileContent(value) {
-    if (!activeFile) return
-    setOpenFiles(prev => prev.map(file => (
-      file.path === activeFile.path ? { ...file, content: value } : file
-    )))
-  }
-
-  function toggleWorkspaceAttachment(item) {
-    const path = String(item?.path || '')
-    if (!path) return
-    setAttachedWorkspaceItems(prev => {
-      if (prev.some(x => x.path === path)) return prev.filter(x => x.path !== path)
-      return [...prev, {
-        path,
-        name: item.name || fileNameFromPath(path),
-        type: item.type === 'directory' ? 'directory' : 'file',
-      }]
-    })
-  }
-
-  function removeWorkspaceAttachment(path) {
-    setAttachedWorkspaceItems(prev => prev.filter(item => item.path !== path))
-  }
-
   function removePastedTextItem(id) {
     setPastedTextItems(prev => prev.filter(item => item.id !== id))
   }
 
-  function captureEditorSelection(e) {
-    if (!activeFile) return
-    const target = e.currentTarget
-    const start = Number(target.selectionStart || 0)
-    const end = Number(target.selectionEnd || 0)
-    if (end <= start) return
-    const selected = String(target.value || '').slice(start, end)
-    if (!selected.trim()) return
-    const before = String(target.value || '').slice(0, start)
-    const lineStart = before ? countTextLines(before) : 1
-    const lineCount = countTextLines(selected)
-    const lineEnd = lineStart + Math.max(lineCount - 1, 0)
-    const clipped = selected.slice(0, SELECTED_TEXT_CONTEXT_MAX_CHARS)
-    const name = activeFile.name || fileNameFromPath(activeFile.path)
-    setSelectedTextContext({
-      id: `selection:${activeFile.path}:${start}:${end}`,
-      type: 'selection',
-      path: activeFile.path,
-      name,
-      label: `selection · ${name} L${lineStart}${lineEnd !== lineStart ? `-${lineEnd}` : ''}`,
-      text: clipped,
-      lineStart,
-      lineEnd,
-      lineCount,
-      charCount: selected.length,
-    })
+  function removeAttachedFile(id) {
+    setAttachedFiles(prev => prev.filter(item => item.id !== id))
   }
 
-  function resolveAttachedFiles(items) {
-    const seen = new Set()
-    const files = []
-    for (const item of items || []) {
-      const node = findWorkspaceNode(workspaceTree, item.path) || item
-      const candidates = node.type === 'directory' ? collectWorkspaceFiles(node, []) : [node]
-      for (const file of candidates) {
-        if (!file?.path || seen.has(file.path)) continue
-        seen.add(file.path)
-        files.push(file)
-      }
+  function toggleFilePickerSelect(item) {
+    if (item.type === 'directory') {
+      const files = collectWorkspaceFiles(item)
+      setFilePickerSelected(prev => {
+        const next = new Set(prev)
+        const allSelected = files.every(f => prev.has(f.path))
+        for (const f of files) {
+          if (allSelected) next.delete(f.path)
+          else next.add(f.path)
+        }
+        return next
+      })
+    } else {
+      setFilePickerSelected(prev => {
+        const next = new Set(prev)
+        if (next.has(item.path)) next.delete(item.path)
+        else next.add(item.path)
+        return next
+      })
     }
-    return files
   }
 
-  async function buildAttachedWorkspaceContext(items) {
-    const files = resolveAttachedFiles(items).slice(0, ATTACH_CONTEXT_MAX_FILES)
-    if (files.length === 0) return ''
+  async function fetchFileContent(filePath) {
+    const url = getWorkspaceFileRawUrl(backendUrl, course.course_id, filePath)
+    const resp = await fetch(url)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return await resp.text()
+  }
 
-    const sections = []
-    const skipped = []
-    let totalChars = 0
-    for (const file of files) {
-      if (totalChars >= ATTACH_CONTEXT_MAX_CHARS) break
+  async function confirmFileAttach() {
+    const paths = Array.from(filePickerSelected)
+    if (paths.length === 0) { setShowFilePicker(false); return }
+
+    const newFiles = []
+    for (const path of paths) {
       try {
-        const res = await readWorkspaceFileApi(backendUrl, course.course_id, file.path)
-        const raw = String(res.content || '')
-        const remaining = ATTACH_CONTEXT_MAX_CHARS - totalChars
-        const content = raw.slice(0, Math.min(ATTACH_CONTEXT_FILE_CHARS, remaining))
-        totalChars += content.length
-        sections.push(`<file path="${res.path || file.path}">\n${content}\n</file>`)
+        const content = await fetchFileContent(path)
+        const name = fileNameFromPath(path)
+        const clipped = content.slice(0, PASTED_TEXT_CONTEXT_MAX_CHARS)
+        const lineCount = countTextLines(clipped)
+        newFiles.push({
+          id: `file:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+          type: 'file',
+          path,
+          name,
+          label: `file · ${name}`,
+          text: clipped,
+          lineCount,
+          charCount: content.length,
+          preview: compactOneLine(clipped),
+        })
       } catch (e) {
-        skipped.push(`${file.path}: ${e?.message || e}`)
+        showToast(`读取文件失败: ${path}`, 'error')
       }
     }
 
-    if (skipped.length > 0) {
-      sections.push(`<skipped>\n${skipped.slice(0, 6).join('\n')}\n</skipped>`)
-    }
-    if (sections.length === 0) return ''
-    return `以下是用户通过项目文件选择器附加的上下文，请优先参考：\n\n${sections.join('\n\n')}`
+    setAttachedFiles(prev => [...prev, ...newFiles])
+    setFilePickerSelected(new Set())
+    setShowFilePicker(false)
   }
 
-  function buildInlineTextContext(selection, pastedItems) {
+  function buildInlineTextContext(pastedItems, fileItems) {
     const sections = []
-    if (selection?.text) {
-      sections.push(`<selection path="${selection.path || ''}" lines="${selection.lineStart || 1}-${selection.lineEnd || selection.lineStart || 1}">\n${selection.text}\n</selection>`)
-    }
     for (const item of pastedItems || []) {
       if (!item?.text) continue
       sections.push(`<pasted lines="${item.lineCount || countTextLines(item.text)}">\n${item.text}\n</pasted>`)
     }
-    if (sections.length === 0) return ''
-    return `以下是用户在编辑器中选中的文本或粘贴的大段文本，请作为本轮问题的直接上下文：\n\n${sections.join('\n\n')}`
-  }
-
-  async function saveActiveFile() {
-    if (!activeFile || fileSaving) return
-    setFileSaving(true)
-    try {
-      const res = await saveWorkspaceFileApi(backendUrl, course.course_id, {
-        path: activeFile.path,
-        content: activeFile.content,
-        encoding: activeFile.encoding || 'utf-8',
-      })
-      setOpenFiles(prev => prev.map(file => (
-        file.path === activeFile.path
-          ? { ...file, savedContent: file.content, size: res.size, modified_at: res.modified_at }
-          : file
-      )))
-      showToast('文件已保存', 'success')
-      fetchWorkspaceFiles()
-    } catch (e) {
-      showToast('保存失败: ' + (e?.message || e), 'error')
-    } finally {
-      setFileSaving(false)
+    for (const item of fileItems || []) {
+      if (!item?.text) continue
+      sections.push(`<attached_file path="${item.path}" lines="${item.lineCount}">\n${item.text}\n</attached_file>`)
     }
+    if (sections.length === 0) return ''
+    return `以下是用户提供的额外上下文：\n\n${sections.join('\n\n')}`
   }
 
   function toggleSelect(docId) {
@@ -567,20 +433,142 @@ export default function CourseChatPage({
     }
   }
 
+  async function applyPersonaToProjectChat(persona) {
+    const prompt = String(persona?.content || '').trim()
+    if (!prompt) {
+      showToast('这个人设 md 还没有可用内容', 'error')
+      return
+    }
+    if (loading) {
+      showToast('当前项目对话正在生成，稍后再应用人设', 'error')
+      return
+    }
+
+    let sourceMessages = messages
+    if (pureConversationMessages(sourceMessages).length === 0) {
+      try {
+        const res = await getChatSessionApi(backendUrl, chatSessionId, userId)
+        const stored = Array.isArray(res.messages) ? res.messages : []
+        const visibleMessages = stored.filter(m => m?.role === 'user' || m?.role === 'assistant')
+        if (visibleMessages.length > 0) {
+          sourceMessages = visibleMessages
+          setMessages(visibleMessages)
+        }
+      } catch (e) {
+        void e
+      }
+    }
+
+    const cleanMessages = pureConversationMessages(sourceMessages)
+    if (cleanMessages.length === 0) {
+      showToast('当前项目会话还没有用户/AI 对话可处理', 'error')
+      return
+    }
+
+    const assistantId = `persona-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const patchAssistant = updater => {
+      setMessages(prev => prev.map(item => {
+        if (item.id !== assistantId) return item
+        const patch = typeof updater === 'function' ? updater(item) : updater
+        return { ...item, ...patch }
+      }))
+    }
+
+    setLoading(true)
+    setLastLatency(null)
+    setMessages(prev => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        refs: [],
+        plan: [],
+        operations: [],
+        activity: [],
+        usage: { pending: true, output_tokens_estimate: 0 },
+        model: '',
+        streaming: true,
+        created_at: new Date().toISOString(),
+        metadata: {
+          persona_id: persona.id || '',
+          persona_name: persona.name || persona.id || '',
+          transient_persona_apply: true,
+        },
+      },
+    ])
+
+    try {
+      let doneReceived = false
+      let latestText = ''
+      let latestUsage = null
+      const resp = await personaApplyStreamApi(backendUrl, {
+        user_id: userId,
+        session_id: chatSessionId,
+        persona_prompt: prompt,
+        messages: cleanMessages,
+        persist_to_session: true,
+      }, {
+        onDelta: (_delta, fullText) => {
+          latestText = fullText
+          patchAssistant(item => ({
+            content: fullText,
+            usage: item.usage?.pending
+              ? { ...item.usage, output_tokens_estimate: estimateOutputTokens(fullText) }
+              : item.usage,
+            streaming: true,
+          }))
+        },
+        onUsage: usage => {
+          latestUsage = usage
+          patchAssistant({ usage })
+        },
+        onDone: done => {
+          doneReceived = true
+          latestText = done.reply || latestText
+          latestUsage = done.usage || latestUsage
+          patchAssistant({
+            content: latestText,
+            usage: latestUsage || null,
+            model: done.model || '',
+            streaming: false,
+            completed_at: new Date().toISOString(),
+          })
+          if (done.latency_ms) setLastLatency(done.latency_ms)
+        },
+      })
+      if (!doneReceived) {
+        patchAssistant({
+          content: resp.reply || latestText,
+          usage: latestUsage || null,
+          model: resp.model || '',
+          streaming: false,
+          completed_at: new Date().toISOString(),
+        })
+      }
+      if (resp.latency_ms) setLastLatency(resp.latency_ms)
+    } catch (err) {
+      patchAssistant({
+        content: '人设处理失败：' + (err?.message || err),
+        refs: [],
+        usage: null,
+        streaming: false,
+      })
+      showToast('人设处理失败', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleSend() {
     const text = input.trim()
-    const attachedForSend = [...attachedWorkspaceItems]
-    const selectedForSend = selectedTextContext ? { ...selectedTextContext } : null
     const pastedForSend = [...pastedTextItems]
-    if (!text && pendingImages.length === 0 && attachedForSend.length === 0 && !selectedForSend && pastedForSend.length === 0) return
+    const filesForSend = [...attachedFiles]
+    if (!text && pendingImages.length === 0 && pastedForSend.length === 0 && filesForSend.length === 0) return
 
     const imgs = [...pendingImages]
     const displayText = text || '请参考附加的上下文。'
-    const displayAttachments = [
-      ...attachedForSend,
-      ...(selectedForSend ? [selectedForSend] : []),
-      ...pastedForSend,
-    ]
+    const displayAttachments = [...pastedForSend, ...filesForSend]
     const displayUserMsg = { role: 'user', content: displayText, attachments: displayAttachments, created_at: new Date().toISOString() }
     const assistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const patchAssistant = updater => {
@@ -608,23 +596,19 @@ export default function CourseChatPage({
     ])
     setInput('')
     setPendingImages([])
-    setAttachedWorkspaceItems([])
-    setSelectedTextContext(null)
     setPastedTextItems([])
-    setAttachPickerOpen(false)
-    setWorkspacePage('chat')
+    setAttachedFiles([])
     setLoading(true)
     setLastLatency(null)
 
     try {
-      const attachedContext = await buildAttachedWorkspaceContext(attachedForSend)
-      const inlineContext = buildInlineTextContext(selectedForSend, pastedForSend)
-      const combinedContext = [attachedContext, inlineContext].filter(Boolean).join('\n\n')
+      const inlineContext = buildInlineTextContext(pastedForSend, filesForSend)
       const apiUserMsg = {
         role: 'user',
-        content: combinedContext ? `${displayText}\n\n${combinedContext}` : displayText,
+        content: inlineContext ? `${displayText}\n\n${inlineContext}` : displayText,
       }
       const docIds = Array.from(selectedIds)
+      const rtFlags = loadRuntimeFlags()
       const payload = {
         user_id: userId,
         session_id: chatSessionId,
@@ -632,6 +616,9 @@ export default function CourseChatPage({
         use_retrieval: docIds.length > 0,
         document_ids: docIds.length > 0 ? docIds : undefined,
         workspace_path: course.project_path || workspaceRoot || undefined,
+        thinking_enabled: rtFlags.thinking_enabled,
+        subagent_enabled: rtFlags.subagent_enabled,
+        function_calling_enabled: rtFlags.fc_enabled,
       }
       if (imgs.length > 0) payload.image_url = imgs[0]
 
@@ -747,6 +734,12 @@ export default function CourseChatPage({
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      const cmd = trySlashCommand(input)
+      if (cmd.handled) {
+        setInput('')
+        showToast(cmd.message, cmd.message.includes('ON') ? 'success' : 'info')
+        return
+      }
       handleSend()
     }
   }
@@ -804,7 +797,11 @@ export default function CourseChatPage({
       setUploadProgress(null)
       setShowUpload(false)
       fetchMaterials()
-      setPreviewDocId(res.document_id)
+      if (String(res.file_type || '').toLowerCase() === 'pdf' && res.document_id) {
+        openPdfInline(Number(res.document_id), getMaterialViewUrl(backendUrl, Number(res.document_id)), 1)
+      } else {
+        setPreviewDocId(res.document_id)
+      }
     } catch (err) {
       setUploadProgress(null)
       showToast('上传失败：' + (err?.message || err), 'error')
@@ -833,6 +830,7 @@ export default function CourseChatPage({
     setImportingFiles(false)
     if (ok > 0) {
       showToast(`导入完成：${ok} 个成功${fail > 0 ? `，${fail} 个失败` : ''}`, fail > 0 ? 'error' : 'success')
+      fetchMaterials()
       fetchWorkspaceFiles()
     } else {
       showToast('导入失败', 'error')
@@ -930,14 +928,6 @@ export default function CourseChatPage({
       } else {
         await deleteWorkspaceFileApi(backendUrl, course.course_id, item.path)
       }
-      // Close any open tabs for deleted files
-      if (item.type === 'file') {
-        setOpenFiles(prev => prev.filter(f => f.path !== item.path))
-        if (activeFilePath === item.path) setActiveFilePath('')
-      } else {
-        setOpenFiles(prev => prev.filter(f => !f.path.startsWith(item.path + '/')))
-        if (activeFilePath && activeFilePath.startsWith(item.path + '/')) setActiveFilePath('')
-      }
       showToast(`${item.name} 已删除`, 'success')
       fetchWorkspaceFiles()
     } catch (e) {
@@ -951,11 +941,6 @@ export default function CourseChatPage({
       parts[parts.length - 1] = newName
       const targetPath = parts.join('/')
       await renameWorkspaceItemApi(backendUrl, course.course_id, { source_path: item.path, target_path: targetPath })
-      // Update open file tabs
-      if (item.type === 'file') {
-        setOpenFiles(prev => prev.map(f => f.path === item.path ? { ...f, path: targetPath, name: newName } : f))
-        if (activeFilePath === item.path) setActiveFilePath(targetPath)
-      }
       showToast(`已重命名为 ${newName}`, 'success')
       fetchWorkspaceFiles()
     } catch (e) {
@@ -963,12 +948,18 @@ export default function CourseChatPage({
     }
   }
 
-  const hasInlineContext = !!selectedTextContext || pastedTextItems.length > 0
-  const canSend = (input.trim() || pendingImages.length > 0 || attachedWorkspaceItems.length > 0 || hasInlineContext) && !loading
+  function buildThreadTitle(messages) {
+    for (const m of messages || []) {
+      if (m?.role !== 'user') continue
+      const t = String(m.content || '').trim()
+      if (t) return t.length > 40 ? t.slice(0, 37) + '...' : t
+    }
+    return ''
+  }
+
+  const hasInlineContext = pastedTextItems.length > 0 || attachedFiles.length > 0
+  const canSend = (input.trim() || pendingImages.length > 0 || hasInlineContext) && !loading
   const previewMaterial = materials.find(mat => mat.document_id === previewDocId)
-  const activeFileDirty = !!activeFile && activeFile.content !== activeFile.savedContent
-  const attachedPathSet = new Set(attachedWorkspaceItems.map(item => item.path))
-  const hasComposerContexts = attachedWorkspaceItems.length > 0 || hasInlineContext
 
   return (
     <div className={`course-chat-layout${resizing ? " is-resizing" : ""}`} ref={layoutRef}>
@@ -984,7 +975,6 @@ export default function CourseChatPage({
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" width="14" height="14" strokeWidth="1.3"><path d="M1.5 3.5h4.5l1 1.5h5.5a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2.5a1 1 0 0 1-1-1V3.5z"/><line x1="6" y1="8.5" x2="10" y2="8.5"/><line x1="8" y1="6.5" x2="8" y2="10.5"/></svg>
             </button>
             <button className="sidebar-icon-btn" onClick={handleImportClick} title="导入文件到工作区" disabled={importingFiles}>{importingFiles ? '...' : '↑'}</button>
-            <button className="ghost-btn small" onClick={fetchWorkspaceFiles} disabled={workspaceLoading}>{workspaceLoading ? '刷新中' : '刷新'}</button>
           </div>
         </div>
 
@@ -1027,8 +1017,9 @@ export default function CourseChatPage({
             <FileTreeNode
               key={`${item.type}:${item.path}`}
               item={item}
-              activePath={activeFilePath}
-              openFile={openWorkspaceFile}
+              activePath={null}
+              openFile={handleFileClick}
+              openInVSCode={openFileInVSCode}
               onCreateFile={handleCreateFile}
               onCreateFolder={handleCreateFolder}
               onDelete={handleDeleteItem}
@@ -1036,12 +1027,15 @@ export default function CourseChatPage({
             />
           ))}
         </div>
+
       </div>
 
       {fileTreeContextMenu && (
         <>
           <div className="context-menu-backdrop" onClick={() => setFileTreeContextMenu(null)} onContextMenu={e => { e.preventDefault(); setFileTreeContextMenu(null) }} />
           <div className="context-menu" style={{ left: fileTreeContextMenu.x, top: fileTreeContextMenu.y }}>
+            <button className="context-menu-item" onClick={() => { setFileTreeContextMenu(null); fetchWorkspaceFiles() }}>刷新文件树</button>
+            <div className="context-menu-divider" />
             <button className="context-menu-item" onClick={() => { setFileTreeContextMenu(null); setRootCreating('file'); setRootCreateValue('') }}>新建文件</button>
             <button className="context-menu-item" onClick={() => { setFileTreeContextMenu(null); setRootCreating('folder'); setRootCreateValue('') }}>新建文件夹</button>
           </div>
@@ -1051,100 +1045,61 @@ export default function CourseChatPage({
       <div className="pane-resizer" onMouseDown={(e) => { e.preventDefault(); setResizing('left') }} />
 
       <div className="course-chat-right">
-        <div className="chat-panel">
+        <div className="chat-panel" style={{ display: pdfView.active ? 'none' : 'flex' }}>
           <div className="topbar project-editor-topbar">
             <div className="project-window-tabs">
               {chatTabs.map(thread => (
-                <button
+                <div
                   key={thread.id}
-                  type="button"
-                  className={`project-window-tab chat-tab${workspacePage === 'chat' && thread.id === currentThreadId ? ' active' : ''}`}
-                  onClick={() => openChatTab(thread.id)}
+                  role="button"
+                  tabIndex={0}
+                  className={`project-window-tab chat-tab${thread.id === currentThreadId ? ' active' : ''}`}
+                  onClick={() => {
+                    if (thread.id !== currentThreadId) onOpenThread?.(thread.id)
+                  }}
+                  onKeyDown={e => {
+                    if ((e.key === 'Enter' || e.key === ' ') && thread.id !== currentThreadId) {
+                      e.preventDefault()
+                      onOpenThread?.(thread.id)
+                    }
+                  }}
                   title={thread.title || '新对话'}
                 >
                   <span>{thread.title || '新对话'}</span>
-                  <b onClick={(e) => closeChatTab(thread.id, e)}>x</b>
-                </button>
-              ))}
-              {openFiles.map(file => (
-                <button
-                  key={file.path}
-                  type="button"
-                  className={`project-window-tab file-tab${workspacePage === 'files' && file.path === activeFile?.path ? ' active' : ''}${file.content !== file.savedContent ? ' dirty' : ''}`}
-                  onClick={() => { setActiveFilePath(file.path); setWorkspacePage('files') }}
-                  title={file.path}
-                >
-                  <span>{file.name || fileNameFromPath(file.path)}</span>
-                  {file.content !== file.savedContent && <em>*</em>}
-                  <b onClick={(e) => closeWorkspaceFile(file.path, e)}>x</b>
-                </button>
+                  <button
+                    type="button"
+                    className="project-window-tab-close"
+                    onClick={(e) => closeChatTab(thread.id, e)}
+                    title="关闭对话"
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
             </div>
             <div className="topbar-spacer" />
-            <button className="ghost-btn small project-window-add" onClick={() => onNewThread?.()} title="新建对话窗口">+</button>
-            {workspacePage === 'files' && (
-              <button className="ghost-btn small" onClick={saveActiveFile} disabled={!activeFileDirty || fileSaving}>{fileSaving ? '保存中' : activeFileDirty ? '保存 *' : '已保存'}</button>
-            )}
-            {workspacePage === 'chat' && (
-              <span className={`topbar-status ${loading ? 'loading' : ''}`}>
-                {loading ? '生成中…' : lastLatency ? `${lastLatency} ms` : 'ready'}
-              </span>
-            )}
+            <span className={`topbar-status ${loading ? 'loading' : ''}`}>
+              {loading ? '生成中…' : lastLatency ? `${lastLatency} ms` : 'ready'}
+            </span>
           </div>
 
-          {workspacePage === 'files' && (
-            <div className="workspace-editor-page">
-              <div className="workspace-editor-main">
-                {fileLoading && <div className="workspace-editor-empty">正在打开文件...</div>}
-                {!fileLoading && activeFile && (
-                  <>
-                    <div className="workspace-editor-meta">
-                      <span title={activeFile.path}>{activeFile.path}</span>
-                      <code>{activeFile.encoding || 'utf-8'}</code>
-                    </div>
-                    <textarea
-                      ref={editorRef}
-                      className="workspace-code-editor"
-                      value={activeFile.content}
-                      spellCheck={false}
-                      onChange={e => updateActiveFileContent(e.target.value)}
-                      onSelect={captureEditorSelection}
-                      onMouseUp={captureEditorSelection}
-                      onKeyUp={captureEditorSelection}
-                    />
-                  </>
-                )}
-                {!fileLoading && !activeFile && (
-                  <div className="workspace-editor-empty">从左侧文件树选择一个文本文件打开</div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div
-            className={`project-agent-split${workspacePage !== 'chat' ? ' hidden' : ''}`}
-            style={{ gridTemplateColumns: `minmax(0, 1fr) 8px ${opsPaneWidth}px` }}
-          >
-            <div className="chat-area project-chat-scroll project-agent-dialogue">
-              {messages.length === 0 && (
-                <div className="chat-empty">
-                  <div className="chat-empty-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22" strokeWidth="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  </div>
-                  <p>左侧显示问答、计划和总结；右侧显示终端输出与代码片段</p>
+          <div className="chat-area project-chat-scroll">
+            {messages.length === 0 && (
+              <div className="chat-empty">
+                <div className="chat-empty-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="22" height="22" strokeWidth="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 </div>
-              )}
-              {messages.map((m, i) => <Message key={i} m={m} onCitationClick={handleCitationClick} />)}
-              {loading && !messages.some(m => m.streaming) && (
-                <>
-                  <TypingIndicator />
-                  <div className="token-usage live">tokens 统计中 · cache -- · out --</div>
-                </>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-            <div className="agent-ops-resizer" onMouseDown={(e) => { e.preventDefault(); setResizing('ops') }} />
-            <OperationPanel messages={messages} />
+                <p>在项目文件树中点击文件可在 VS Code 中打开；下方终端可直接执行命令</p>
+              </div>
+            )}
+            {messages.map((m, i) => <Message key={i} m={m} onCitationClick={handleCitationClick} />)}
+            {loading && !messages.some(m => m.streaming) && (
+              <>
+                <TypingIndicator />
+                <div className="token-usage live">tokens 统计中 · cache -- · out --</div>
+              </>
+            )}
+            <div ref={messagesEndRef} />
           </div>
 
           <div className={`composer-wrap project-composer${isDragging ? ' drag-over' : ''}`} ref={composerRef}
@@ -1167,31 +1122,8 @@ export default function CourseChatPage({
                     ))}
                   </div>
                 )}
-                {hasComposerContexts && (
+                {hasInlineContext && (
                   <div className="composer-context-chips">
-                    {attachedWorkspaceItems.map(item => (
-                      <button
-                        key={`${item.type}:${item.path}`}
-                        type="button"
-                        className="composer-context-chip"
-                        onClick={() => removeWorkspaceAttachment(item.path)}
-                        title={`${item.path} · 点击移除`}
-                      >
-                        <span>{item.type === 'directory' ? '文件夹' : '文件'} · {item.name || fileNameFromPath(item.path)}</span>
-                        <b>x</b>
-                      </button>
-                    ))}
-                    {selectedTextContext && (
-                      <button
-                        type="button"
-                        className="composer-context-chip selected-text"
-                        onClick={() => setSelectedTextContext(null)}
-                        title={`${selectedTextContext.path || ''} · ${selectedTextContext.lineCount || 1} lines · 点击移除`}
-                      >
-                        <span>{selectedTextContext.label || 'selection'}</span>
-                        <b>x</b>
-                      </button>
-                    )}
                     {pastedTextItems.map(item => (
                       <button
                         key={item.id}
@@ -1199,6 +1131,18 @@ export default function CourseChatPage({
                         className="composer-context-chip pasted-text"
                         onClick={() => removePastedTextItem(item.id)}
                         title={`${item.preview || item.name} · 点击移除`}
+                      >
+                        <span>{item.label || item.name}</span>
+                        <b>x</b>
+                      </button>
+                    ))}
+                    {attachedFiles.map(item => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="composer-context-chip attached-file"
+                        onClick={() => removeAttachedFile(item.id)}
+                        title={`${item.path || item.name} · 点击移除`}
                       >
                         <span>{item.label || item.name}</span>
                         <b>x</b>
@@ -1216,38 +1160,38 @@ export default function CourseChatPage({
                       if (e.target.files[0]) { await addImageFile(e.target.files[0]); e.target.value = '' }
                     }} />
                   </label>
-                  <div className="composer-attach-picker" ref={attachPickerRef}>
+                  <div className="composer-attach-picker">
                     <button
-                      type="button"
-                      className={`composer-icon-btn${attachPickerOpen ? ' active' : ''}`}
-                      title="添加项目文件或文件夹"
-                      onClick={() => setAttachPickerOpen(v => !v)}
+                      className="composer-icon-btn"
+                      title="从项目文件中添加"
+                      onClick={() => { setShowFilePicker(v => !v); if (showFilePicker) setFilePickerSelected(new Set()) }}
                     >
-                      +
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="15" height="15"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                     </button>
-                    {attachPickerOpen && (
-                      <div className="attach-picker-popover">
-                        <div className="attach-picker-head">
-                          <strong>添加上下文</strong>
-                          <button type="button" onClick={() => setAttachedWorkspaceItems([])}>清空</button>
+                    {showFilePicker && (
+                      <>
+                        <div className="context-menu-backdrop" onClick={() => { setShowFilePicker(false); setFilePickerSelected(new Set()) }} onContextMenu={e => { e.preventDefault(); setShowFilePicker(false); setFilePickerSelected(new Set()) }} />
+                        <div className="attach-picker-popover" style={{ zIndex: 1000 }}>
+                          <div className="attach-picker-head">
+                            <strong>选择文件</strong>
+                            <button onClick={() => { setShowFilePicker(false); setFilePickerSelected(new Set()) }}>取消</button>
+                          </div>
+                          <div className="attach-picker-list">
+                            {workspaceTree.map(item => (
+                              <AttachTreeNode
+                                key={`${item.type}:${item.path}`}
+                                item={item}
+                                selectedPaths={filePickerSelected}
+                                toggleAttach={toggleFilePickerSelect}
+                              />
+                            ))}
+                          </div>
+                          <div className="attach-picker-foot">
+                            <span>{filePickerSelected.size > 0 ? `已选 ${filePickerSelected.size} 个文件` : '未选择文件'}</span>
+                            <button onClick={confirmFileAttach} disabled={filePickerSelected.size === 0}>确定</button>
+                          </div>
                         </div>
-                        <div className="attach-picker-list">
-                          {workspaceLoading && <div className="workspace-file-empty">正在读取项目文件...</div>}
-                          {!workspaceLoading && workspaceTree.length === 0 && <div className="workspace-file-empty">项目目录暂无文件</div>}
-                          {!workspaceLoading && workspaceTree.map(item => (
-                            <AttachTreeNode
-                              key={`${item.type}:${item.path}`}
-                              item={item}
-                              selectedPaths={attachedPathSet}
-                              toggleAttach={toggleWorkspaceAttachment}
-                            />
-                          ))}
-                        </div>
-                        <div className="attach-picker-foot">
-                          <span>{attachedWorkspaceItems.length} 项已选</span>
-                          <button type="button" onClick={() => setAttachPickerOpen(false)}>完成</button>
-                        </div>
-                      </div>
+                      </>
                     )}
                   </div>
                   <div className="composer-spacer" />
@@ -1258,9 +1202,23 @@ export default function CourseChatPage({
               </div>
           </div>
         </div>
+        {pdfView.active && (
+          <PdfErrorBoundary onClose={closePdfInline}>
+            <PdfViewer
+              url={pdfView.url}
+              documentId={pdfView.docId}
+              backendUrl={backendUrl}
+              userId={userId}
+              initialPage={pdfView.initialPage}
+              threadId={pdfView.threadId}
+              onClose={closePdfInline}
+              style={{ display: 'flex' }}
+            />
+          </PdfErrorBoundary>
+        )}
       </div>
 
-      {previewDocId && (
+      {previewDocId && previewMaterial?.file_type !== 'pdf' && (
         <div className="preview-modal-backdrop" onClick={() => { setPreviewDocId(null); setPreviewPageNo(null) }}>
           <div className="preview-modal" onClick={e => e.stopPropagation()}>
             <div className="preview-modal-head">
@@ -1272,19 +1230,37 @@ export default function CourseChatPage({
               </div>
               <button className="preview-modal-close" onClick={() => { setPreviewDocId(null); setPreviewPageNo(null) }} title="关闭预览">×</button>
             </div>
-            {previewMaterial?.file_type === 'pdf' ? (
-              <React.Suspense fallback={<div className="pdf-viewer-status">加载 PDF 查看器...</div>}>
-                <PdfViewer
-                  url={getMaterialViewUrl(backendUrl, previewDocId)}
-                  initialPage={previewPageNo || 1}
-                />
-              </React.Suspense>
-            ) : (
-              <iframe className="preview-modal-frame" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1${previewPageNo ? `#page=${previewPageNo}` : ''}`} title="project file preview" />
-            )}
+            <iframe className="preview-modal-frame" src={`${getMaterialViewUrl(backendUrl, previewDocId)}?inline=1${previewPageNo ? `#page=${previewPageNo}` : ''}`} title="project file preview" />
           </div>
         </div>
       )}
     </div>
   )
+}
+
+class PdfErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="pdf-inline-viewer" style={{ display: 'flex', flex: 1, flexDirection: 'column', overflow: 'hidden', background: '#fafbfc' }}>
+          <div className="pdf-inline-toolbar">
+            <span className="pdf-inline-page-info">PDF 查看器</span>
+            <button className="pdf-inline-close-btn" onClick={this.props.onClose} title="关闭">×</button>
+          </div>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
+            <p style={{ color: 'var(--text-error, #d73a49)', fontWeight: 600 }}>PDF 组件渲染错误</p>
+            <pre style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxWidth: '100%' }}>{this.state.error?.stack || this.state.error?.message || String(this.state.error)}</pre>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }

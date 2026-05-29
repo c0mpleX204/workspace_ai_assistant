@@ -96,7 +96,15 @@ def _prepare_conversation(
 
 
 
-def _build_input_data(payload: Any, final_messages: List[Dict[str, str]]) -> Dict[str, Any]:
+def _resolve_runtime_flag(payload: Any, attr: str, default: bool) -> bool:
+    """Resolve a runtime flag: request override > environment setting."""
+    val = getattr(payload, attr, None)
+    if val is not None:
+        return bool(val)
+    return default
+
+
+def _build_input_data(payload: Any, final_messages: List[Dict[str, str]], thinking_enabled: bool = False) -> Dict[str, Any]:
     input_data: Dict[str, Any] = {"messages": final_messages}
     if payload.image_url:
         input_data["image_url"] = payload.image_url
@@ -104,6 +112,8 @@ def _build_input_data(payload: Any, final_messages: List[Dict[str, str]]) -> Dic
         input_data["audio_url"] = payload.audio_url
     if payload.files:
         input_data["files"] = payload.files
+    if thinking_enabled:
+        input_data["thinking_enabled"] = True
     return input_data
 
 
@@ -248,6 +258,7 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
 
         final_messages = build_final_messages(
             merged_messages,
+            persona_prompt=str(getattr(payload, "persona_prompt", "") or ""),
             conversation_summary=conversation_summary,
             memory_text=memory_text,
             query=query,
@@ -256,7 +267,8 @@ async def handle_chat(payload: Any) -> Dict[str, Any]:
             command_context=command_context,
         )
 
-        input_data = _build_input_data(payload, final_messages)
+        think_enabled_chat = _resolve_runtime_flag(payload, "thinking_enabled", getattr(settings, "thinking_enabled", False))
+        input_data = _build_input_data(payload, final_messages, thinking_enabled=think_enabled_chat)
         result = await run_in_threadpool(smart_model_dispatch, input_data)
 
         latency_ms = int((time.time() - start) * 1000)
@@ -432,6 +444,7 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
             )
             final_messages = build_final_messages(
                 merged_messages,
+                persona_prompt=str(getattr(payload, "persona_prompt", "") or ""),
                 conversation_summary=conversation_summary,
                 memory_text=memory_text,
                 query=query,
@@ -442,7 +455,7 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
             yield status_event("正在生成回答", kind="model")
 
             if payload.image_url or payload.audio_url or payload.files:
-                input_data = _build_input_data(payload, final_messages)
+                input_data = _build_input_data(payload, final_messages, thinking_enabled=think_enabled)
                 result = smart_model_dispatch(input_data)
                 reply = str(result.get("reply", "")).strip()
                 usage = dict(result.get("usage") or {})
@@ -472,13 +485,23 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
                 "temperature": settings.temperature,
                 "top_p": settings.top_p,
             }
+            think_enabled = _resolve_runtime_flag(payload, "thinking_enabled", getattr(settings, "thinking_enabled", False))
             reply_chunks: List[str] = []
             usage: Dict[str, object] = {}
             try:
-                for event in remote_stream_events(final_messages, generation=stream_generation):
+                for event in remote_stream_events(
+                    final_messages,
+                    generation=stream_generation,
+                    thinking_enabled=think_enabled,
+                ):
                     if event.get("type") == "usage":
                         usage = dict(event.get("usage") or {})
                         yield f"data: {json.dumps({'usage': usage}, ensure_ascii=False)}\n\n"
+                        continue
+                    if event.get("type") == "reasoning":
+                        delta = str(event.get("delta") or "")
+                        if delta:
+                            yield f"data: {json.dumps({'reasoning': delta}, ensure_ascii=False)}\n\n"
                         continue
                     raw_delta = event.get("delta", "")
                     if raw_delta is None:
@@ -489,12 +512,19 @@ def create_chat_stream(payload: Any) -> StreamingResponse:
                         yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
             except Exception as stream_exc:
                 logging.warning(f"chat stream upstream failed, fallback to non-stream: {stream_exc}")
-                fallback_result = smart_model_dispatch({"messages": final_messages, "generation": stream_generation})
+                fallback_result = smart_model_dispatch({
+                    "messages": final_messages,
+                    "generation": stream_generation,
+                    "thinking_enabled": think_enabled,
+                })
                 fallback_reply = str(fallback_result.get("reply", "")).strip()
                 if not fallback_reply:
                     raise stream_exc
                 reply_chunks = [fallback_reply]
                 usage = dict(fallback_result.get("usage") or {})
+                reasoning = str(fallback_result.get("reasoning") or "")
+                if reasoning:
+                    yield f"data: {json.dumps({'reasoning': reasoning}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'delta': fallback_reply}, ensure_ascii=False)}\n\n"
 
             reply = "".join(reply_chunks).strip()

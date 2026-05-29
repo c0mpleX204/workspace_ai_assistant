@@ -31,8 +31,10 @@ from server.services.agent.plan import (
 )
 from server.services.agent.reshape import _normalize_planner, reshape_agent_request
 from server.services.agent.state import _now_iso, _save_run, load_agent_run
+from server.services.agent.subagent import SubAgentTask, build_subagent_context, run_subagents_parallel
 from server.services.chat.flow import (
     _prepare_conversation,
+    _resolve_runtime_flag,
     build_final_messages,
     build_inline_context_reference_items,
     build_reference_items,
@@ -137,12 +139,14 @@ def create_agent_run_stream(payload: Any) -> StreamingResponse:
             yield emit_plan()
             yield emit_status("正在让模型 reshape 输入并拆解任务", kind="planner")
             try:
+                fc_enabled = _resolve_runtime_flag(payload, "function_calling_enabled", getattr(settings, "function_calling_enabled", False))
                 planner = reshape_agent_request(
                     query=query,
                     merged_messages=merged_messages,
                     workspace_path=workspace_path,
                     forced_retrieval=forced_retrieval,
                     project_memory_text=project_memory_text,
+                    function_calling_enabled=fc_enabled,
                 )
             except Exception as exc:
                 logging.warning("agent reshape failed: %s", exc)
@@ -172,6 +176,13 @@ def create_agent_run_stream(payload: Any) -> StreamingResponse:
                 and str(action.get("command") or "").strip()
             ]
 
+            subagent_ok = _resolve_runtime_flag(payload, "subagent_enabled", getattr(settings, "subagent_enabled", False))
+            use_subagent = (
+                subagent_ok
+                and effective_use_retrieval
+                and effective_use_web
+            )
+
             if effective_use_retrieval or effective_use_web:
                 yield emit_status("正在改写检索查询", kind="search")
                 try:
@@ -179,50 +190,113 @@ def create_agent_run_stream(payload: Any) -> StreamingResponse:
                 except Exception as exc:
                     logging.warning("agent query rewrite failed: %s", exc)
 
-            if effective_use_retrieval:
-                _update_plan_step(run["plan"], "检索项目资料", "running")
+            if use_subagent:
+                _update_plan_step(run["plan"], "并行检索与搜索", "running")
                 yield emit_plan()
-                yield emit_status("正在检索项目资料", retrieval_query, "retrieval")
-                try:
-                    eff_doc_ids = (
-                        list(getattr(payload, "document_ids", None) or [])
-                        or ([getattr(payload, "document_id", None)] if getattr(payload, "document_id", None) else [])
-                    )
-                    if eff_doc_ids:
-                        retrieved_chunks = retrieve_chunks_multi(
-                            query=retrieval_query,
-                            document_ids=eff_doc_ids,
-                            top_k=20,
-                            candidate_limit=2000,
-                        )
-                    else:
-                        retrieved_chunks = retrieve_chunks_for_chat(
-                            query=retrieval_query,
-                            document_id=getattr(payload, "document_id", None),
-                            top_k=20,
-                            candidate_limit=2000,
-                        )
-                    recall_ctx = build_retrieval_context(retrieved_chunks)
-                    yield emit_status(f"找到 {len(retrieved_chunks)} 条项目资料片段", kind="retrieval")
-                    _update_plan_step(run["plan"], "检索项目资料", "done")
-                    yield emit_plan()
-                except Exception as exc:
-                    _update_plan_step(run["plan"], "检索项目资料", "done")
-                    yield emit_status("项目资料检索失败，继续回答", str(exc), "warning")
+                yield emit_status("正在并行检索资料与搜索网络", retrieval_query, "parallel")
 
-            if effective_use_web:
-                _update_plan_step(run["plan"], "查找网上资料", "running")
+                eff_doc_ids = (
+                    list(getattr(payload, "document_ids", None) or [])
+                    or ([getattr(payload, "document_id", None)] if getattr(payload, "document_id", None) else [])
+                )
+                context_block = build_subagent_context(retrieval_query)
+
+                def _retrieval_subagent(task: SubAgentTask) -> Dict[str, Any]:
+                    try:
+                        if eff_doc_ids:
+                            chunks = retrieve_chunks_multi(
+                                query=retrieval_query,
+                                document_ids=eff_doc_ids,
+                                top_k=20,
+                                candidate_limit=2000,
+                            )
+                        else:
+                            chunks = retrieve_chunks_for_chat(
+                                query=retrieval_query,
+                                document_id=getattr(payload, "document_id", None),
+                                top_k=20,
+                                candidate_limit=2000,
+                            )
+                        return {"reply": build_retrieval_context(chunks), "chunks": chunks, "count": len(chunks)}
+                    except Exception as exc:
+                        return {"reply": "", "chunks": [], "count": 0, "error": str(exc)}
+
+                def _web_subagent(task: SubAgentTask) -> Dict[str, Any]:
+                    try:
+                        results = web_search(retrieval_query, top_k=5)
+                        return {"reply": build_web_context(results), "results": results, "count": len(results)}
+                    except Exception as exc:
+                        return {"reply": "", "results": [], "count": 0, "error": str(exc)}
+
+                sub_tasks = [
+                    SubAgentTask(id="retrieval", title="检索项目资料", prompt=context_block),
+                    SubAgentTask(id="web", title="查找网上资料", prompt=context_block),
+                ]
+                sub_results = run_subagents_parallel(
+                    sub_tasks,
+                    executor_fn=lambda t: _retrieval_subagent(t) if t.id == "retrieval" else _web_subagent(t),
+                    max_workers=2,
+                    timeout_sec=45.0,
+                )
+                for sr in sub_results:
+                    if sr.get("task_id") == "retrieval" and sr.get("ok"):
+                        retrieved_chunks = sr.get("chunks", [])
+                        recall_ctx = str(sr.get("reply") or "")
+                        yield emit_status(f"找到 {sr.get('count', 0)} 条项目资料片段", kind="retrieval")
+                    elif sr.get("task_id") == "web" and sr.get("ok"):
+                        web_results = sr.get("results", [])
+                        web_context = str(sr.get("reply") or "")
+                        yield emit_status(f"找到 {sr.get('count', 0)} 条网页结果", kind="web")
+                    elif not sr.get("ok"):
+                        yield emit_status(f"{sr.get('task_id')} 失败: {sr.get('error', '')}", kind="warning")
+
+                _update_plan_step(run["plan"], "并行检索与搜索", "done")
                 yield emit_plan()
-                yield emit_status("正在查找网上资料", retrieval_query, "web")
-                try:
-                    web_results = web_search(retrieval_query, top_k=5)
-                    web_context = build_web_context(web_results)
-                    yield emit_status(f"找到 {len(web_results)} 条网页结果", kind="web")
-                    _update_plan_step(run["plan"], "查找网上资料", "done")
+            else:
+                if effective_use_retrieval:
+                    _update_plan_step(run["plan"], "检索项目资料", "running")
                     yield emit_plan()
-                except Exception as exc:
-                    _update_plan_step(run["plan"], "查找网上资料", "done")
-                    yield emit_status("网上资料查找失败，继续回答", str(exc), "warning")
+                    yield emit_status("正在检索项目资料", retrieval_query, "retrieval")
+                    try:
+                        eff_doc_ids = (
+                            list(getattr(payload, "document_ids", None) or [])
+                            or ([getattr(payload, "document_id", None)] if getattr(payload, "document_id", None) else [])
+                        )
+                        if eff_doc_ids:
+                            retrieved_chunks = retrieve_chunks_multi(
+                                query=retrieval_query,
+                                document_ids=eff_doc_ids,
+                                top_k=20,
+                                candidate_limit=2000,
+                            )
+                        else:
+                            retrieved_chunks = retrieve_chunks_for_chat(
+                                query=retrieval_query,
+                                document_id=getattr(payload, "document_id", None),
+                                top_k=20,
+                                candidate_limit=2000,
+                            )
+                        recall_ctx = build_retrieval_context(retrieved_chunks)
+                        yield emit_status(f"找到 {len(retrieved_chunks)} 条项目资料片段", kind="retrieval")
+                        _update_plan_step(run["plan"], "检索项目资料", "done")
+                        yield emit_plan()
+                    except Exception as exc:
+                        _update_plan_step(run["plan"], "检索项目资料", "done")
+                        yield emit_status("项目资料检索失败，继续回答", str(exc), "warning")
+
+                if effective_use_web:
+                    _update_plan_step(run["plan"], "查找网上资料", "running")
+                    yield emit_plan()
+                    yield emit_status("正在查找网上资料", retrieval_query, "web")
+                    try:
+                        web_results = web_search(retrieval_query, top_k=5)
+                        web_context = build_web_context(web_results)
+                        yield emit_status(f"找到 {len(web_results)} 条网页结果", kind="web")
+                        _update_plan_step(run["plan"], "查找网上资料", "done")
+                        yield emit_plan()
+                    except Exception as exc:
+                        _update_plan_step(run["plan"], "查找网上资料", "done")
+                        yield emit_status("网上资料查找失败，继续回答", str(exc), "warning")
 
             for action in terminal_actions:
                 command_text = str(action.get("command") or "").strip()
@@ -318,8 +392,10 @@ def create_agent_run_stream(payload: Any) -> StreamingResponse:
                 "temperature": settings.temperature,
                 "top_p": settings.top_p,
             }
+            think_enabled = _resolve_runtime_flag(payload, "thinking_enabled", getattr(settings, "thinking_enabled", False))
             usage: Dict[str, Any] = {}
             reply_chunks: List[str] = []
+            reasoning_chunks: List[str] = []
             image_url = str(getattr(payload, "image_url", "") or "")
             audio_url = str(getattr(payload, "audio_url", "") or "")
             if image_url or audio_url:
@@ -327,23 +403,38 @@ def create_agent_run_stream(payload: Any) -> StreamingResponse:
                     "messages": final_messages,
                     "image_url": image_url,
                     "audio_url": audio_url,
+                    "thinking_enabled": think_enabled,
                 })
                 reply_text = str(result.get("reply", "") or "")
                 reply_chunks = [reply_text]
                 usage = dict(result.get("usage") or {})
                 run["reply"] = reply_text
                 run["usage"] = usage
+                reasoning = str(result.get("reasoning") or "")
+                if reasoning:
+                    reasoning_chunks.append(reasoning)
+                    yield append_event("reasoning", {"delta": reasoning})
                 if reply_text:
                     yield append_event("delta", {"delta": reply_text})
                 if usage:
                     yield append_event("usage", {"usage": usage})
             else:
                 try:
-                    for event in remote_stream_events(final_messages, generation=final_generation):
+                    for event in remote_stream_events(
+                        final_messages,
+                        generation=final_generation,
+                        thinking_enabled=think_enabled,
+                    ):
                         if event.get("type") == "usage":
                             usage = dict(event.get("usage") or {})
                             run["usage"] = usage
                             yield append_event("usage", {"usage": usage})
+                            continue
+                        if event.get("type") == "reasoning":
+                            delta = str(event.get("delta") or "")
+                            if delta:
+                                reasoning_chunks.append(delta)
+                                yield append_event("reasoning", {"delta": delta})
                             continue
                         raw_delta = event.get("delta", "")
                         if raw_delta is None:
@@ -354,12 +445,19 @@ def create_agent_run_stream(payload: Any) -> StreamingResponse:
                             yield append_event("delta", {"delta": delta})
                 except Exception as exc:
                     logging.warning("agent run stream failed, fallback to non-stream: %s", exc)
-                    fallback = smart_model_dispatch({"messages": final_messages, "generation": final_generation})
+                    fallback = smart_model_dispatch({
+                        "messages": final_messages,
+                        "generation": final_generation,
+                        "thinking_enabled": think_enabled,
+                    })
                     fallback_reply = str(fallback.get("reply", "") or "")
                     reply_chunks = [fallback_reply]
                     usage = dict(fallback.get("usage") or {})
                     run["reply"] = fallback_reply
                     run["usage"] = usage
+                    reasoning = str(fallback.get("reasoning") or "")
+                    if reasoning:
+                        yield append_event("reasoning", {"delta": reasoning})
                     if fallback_reply:
                         yield append_event("delta", {"delta": fallback_reply})
 

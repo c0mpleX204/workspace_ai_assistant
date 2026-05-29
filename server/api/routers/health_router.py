@@ -45,22 +45,25 @@ def api_agent_tools_status() -> Dict[str, object]:
     }
 
 
+def _provider_settings_for_user(user_id: str) -> Dict[str, object]:
+    return get_provider_config_public()
+
+
 @router.get("/settings/provider")
-def api_get_provider_settings() -> Dict[str, object]:
+def api_get_provider_settings(user_id: str = "user1") -> Dict[str, object]:
     return {
         "ok": True,
-        "provider": get_provider_config_public(),
+        "provider": _provider_settings_for_user(user_id),
     }
 
 
 @router.put("/settings/provider")
 def api_update_provider_settings(payload: ProviderConfigUpdateRequest) -> Dict[str, object]:
-    provider = save_provider_config(
+    save_provider_config(
         api_base_url=payload.api_base_url,
         api_key=payload.api_key,
-        companion_persona_prompt=payload.companion_persona_prompt,
     )
     return {
         "ok": True,
-        "provider": provider,
+        "provider": _provider_settings_for_user(payload.user_id or "user1"),
     }

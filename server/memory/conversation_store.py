@@ -87,6 +87,9 @@ def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def model_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     result: List[Dict[str, str]] = []
     for item in normalize_messages(messages):
+        metadata = item.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("transient_persona_apply"):
+            continue
         result.append({
             "role": str(item.get("role", "")),
             "content": str(item.get("content", "")),

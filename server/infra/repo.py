@@ -169,6 +169,44 @@ def list_chunks_emb(document_id: int | None = None, limit: int = 2000) -> list[d
         for row in rows
     ]
 
+def list_chunks_text(
+    document_id: int | None = None,
+    document_ids: List[int] | None = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    sql = """
+    select c.id as chunk_id, c.document_id, c.content,
+           c.page_no, d.title as document_title, d.source_path
+    from chunks c join documents d on d.id = c.document_id
+    where 1=1
+    """
+    params: list[Any] = []
+    if document_ids:
+        placeholders = ",".join(["%s"] * len(document_ids))
+        sql += f" and c.document_id in ({placeholders})"
+        params.extend(document_ids)
+    elif document_id is not None:
+        sql += " and c.document_id = %s"
+        params.append(document_id)
+    sql += " order by c.id limit %s"
+    params.append(max(1, min(int(limit or 2000), 5000)))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+    return [
+        {
+            "chunk_id": row[0],
+            "document_id": row[1],
+            "content": row[2],
+            "embedding": None,
+            "page_no": row[3],
+            "document_title": row[4],
+            "source_path": row[5],
+        }
+        for row in rows
+    ]
+
 def create_document(course_id: int, title: str, file_type: str, source_path: str) -> int:
     sql = """
     insert into documents (course_id, title, file_type, source_path)

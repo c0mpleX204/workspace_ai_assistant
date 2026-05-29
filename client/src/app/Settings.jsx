@@ -8,15 +8,11 @@ export const DEFAULT_PROVIDER_SETTINGS = {
   has_api_key: false,
   fast_model: '',
   heavy_model: '',
-  companion_persona_prompt: '',
-  default_companion_persona_prompt: '',
 }
 
 export default function Settings({
   backendUrl,
   setBackendUrl,
-  userId,
-  setUserId,
   providerDraft,
   setProviderDraft,
   providerSettings,
@@ -43,10 +39,6 @@ export default function Settings({
           <div className="field">
             <label className="field-label">后端地址</label>
             <input className="field-input" value={backendUrl} onChange={e => setBackendUrl(e.target.value)} placeholder="http://127.0.0.1:8000" />
-          </div>
-          <div className="field">
-            <label className="field-label">用户 ID</label>
-            <input className="field-input" value={userId} onChange={e => setUserId(e.target.value)} placeholder="user1" />
           </div>
         </div>
       </div>
@@ -95,37 +87,6 @@ export default function Settings({
             </button>
             <button className="ghost-btn" onClick={() => loadProviderSettings(true)} disabled={savingProvider}>
               重新读取
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="settings-card">
-        <div className="settings-card-title">陪伴 Persona</div>
-        <div className="field-group">
-          <div className="field">
-            <label className="field-label">自定义 Prompt</label>
-            <textarea
-              className="field-input settings-textarea"
-              value={providerDraft.companion_persona_prompt}
-              onChange={e => setProviderDraft(v => ({ ...v, companion_persona_prompt: e.target.value }))}
-              placeholder={providerSettings.default_companion_persona_prompt || '输入陪伴聊天的默认 persona prompt'}
-              rows={5}
-            />
-          </div>
-          <div className="field-row">
-            <button
-              className="ghost-btn"
-              onClick={() => setProviderDraft(v => ({
-                ...v,
-                companion_persona_prompt: providerSettings.default_companion_persona_prompt || '',
-              }))}
-              disabled={savingProvider}
-            >
-              恢复默认
-            </button>
-            <button className="ghost-btn" onClick={saveProviderSettings} disabled={savingProvider}>
-              {savingProvider ? '保存中' : '保存 Persona'}
             </button>
           </div>
         </div>

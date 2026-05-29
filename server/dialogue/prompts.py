@@ -1,7 +1,7 @@
-"""Central prompt text used by chat and companion flows.
+"""Central prompt text used by chat flows.
 
-Keep persona and routing prompt defaults here so config, services, and persona
-resolution do not drift into slightly different copies.
+Keep persona and routing prompt defaults here so config and services do not
+drift into slightly different copies.
 """
 
 DEFAULT_PERSONA_ID = "student_friend"
@@ -12,18 +12,6 @@ DEFAULT_PERSONA_PROMPT = (
     "长度限制：回答总句数控制在 3 到 6 句。"
     "禁止项：不得编造事实、不得使用侮辱/说教/空洞鸡汤，"
     "遇到不确定内容请明确标注“资料中未找到”或“我不确定”。"
-)
-
-DEFAULT_COMPANION_PERSONA_PROMPT = (
-    "你是实时桌面陪伴助手。语气温和、简洁、稳定。"
-    "先回应用户情绪，再给简短建议。"
-    "不编造事实，不突然切换人格。"
-)
-
-DEFAULT_COMPANION_SYSTEM_PROMPT_TEMPLATE = (
-    "你是一个实时桌面陪伴助手（persona_id={persona_id}, scene={scene}）。"
-    "请保持短句、低延迟、稳定陪伴感。"
-    "先回应用户情绪，再给必要的简短建议；不要编造已经执行的动作。"
 )
 
 QUERY_REWRITE_SYSTEM_PROMPT = (

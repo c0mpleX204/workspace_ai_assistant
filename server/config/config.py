@@ -6,8 +6,6 @@ from typing import Any
 
 from server.dialogue.personas import PERSONAS
 from server.dialogue.prompts import (
-    DEFAULT_COMPANION_PERSONA_PROMPT,
-    DEFAULT_COMPANION_SYSTEM_PROMPT_TEMPLATE,
     DEFAULT_PERSONA_ID,
     DEFAULT_PERSONA_PROMPT,
 )
@@ -124,18 +122,6 @@ class Settings:
     persona_id: str = os.getenv("PERSONA_ID", DEFAULT_PERSONA_ID)
     _default_persona_prompt: str = DEFAULT_PERSONA_PROMPT
 
-    # Companion prompt template
-    companion_system_prompt_template: str = os.getenv(
-        "COMPANION_SYSTEM_PROMPT_TEMPLATE",
-        DEFAULT_COMPANION_SYSTEM_PROMPT_TEMPLATE,
-    )
-    companion_persona_prompt: str = _provider_value(
-        "companion_persona_prompt",
-        "COMPANION_PERSONA_PROMPT",
-        DEFAULT_COMPANION_PERSONA_PROMPT,
-    )
-    companion_tts_max_chars: int = int(os.getenv("COMPANION_TTS_MAX_CHARS", "120"))
-
     @property
     def persona_system_prompt(self) -> str:
         try:
@@ -146,13 +132,6 @@ class Settings:
             pass
         return self._default_persona_prompt
 
-    def build_companion_prompt(self, persona_id: str, scene: str) -> str:
-        text = str(self.companion_system_prompt_template or "")
-        return (
-            text.replace("{persona_id}", persona_id or "default_companion")
-            .replace("{scene}", scene or "desktop")
-        )
-
     # History and memory
     history_max_rounds: int = int(os.getenv("HISTORY_MAX_ROUNDS", "6"))
     memory_enabled: bool = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
@@ -160,6 +139,17 @@ class Settings:
     long_memory_top_k: int = int(os.getenv("LONG_MEMORY_TOP_K", "5"))
     progress_top_k: int = int(os.getenv("PROGRESS_TOP_K", "5"))
     throttle_window_minutes: int = int(os.getenv("THROTTLE_WINDOW_MINUTES", "60"))
+
+    # Extended thinking (reasoning / chain-of-thought)
+    thinking_enabled: bool = os.getenv("THINKING_ENABLED", "true").lower() == "true"
+    thinking_model: str = os.getenv("THINKING_MODEL", remote_heavy_model)
+
+    # Function calling
+    function_calling_enabled: bool = os.getenv("FUNCTION_CALLING_ENABLED", "true").lower() == "true"
+
+    # Sub-agent orchestration
+    subagent_enabled: bool = os.getenv("SUBAGENT_ENABLED", "true").lower() == "true"
+    subagent_max_workers: int = int(os.getenv("SUBAGENT_MAX_WORKERS", "4"))
 
 
 settings = Settings()
@@ -182,8 +172,6 @@ def get_provider_config_public() -> dict[str, Any]:
         "fast_model": settings.remote_fast_model,
         "heavy_model": settings.remote_heavy_model,
         "primary_model": settings.remote_primary_model,
-        "companion_persona_prompt": settings.companion_persona_prompt,
-        "default_companion_persona_prompt": DEFAULT_COMPANION_PERSONA_PROMPT,
         "config_path": str(RUNTIME_PROVIDER_CONFIG_PATH),
     }
 
@@ -192,19 +180,11 @@ def save_provider_config(
     *,
     api_base_url: str | None = None,
     api_key: str | None = None,
-    companion_persona_prompt: str | None = None,
 ) -> dict[str, Any]:
     current = _load_runtime_provider_config()
     incoming_key = None if api_key is None else str(api_key).strip()
     if incoming_key and set(incoming_key) <= {"•", "*", "."}:
         incoming_key = None
-    next_companion_prompt = str(
-        companion_persona_prompt
-        if companion_persona_prompt is not None
-        else current.get("companion_persona_prompt", settings.companion_persona_prompt)
-    ).strip()
-    if not next_companion_prompt:
-        next_companion_prompt = DEFAULT_COMPANION_PERSONA_PROMPT
     next_config = {
         "api_base_url": str(
             api_base_url
@@ -219,7 +199,6 @@ def save_provider_config(
         "fast_model": DEFAULT_FAST_MODEL,
         "heavy_model": DEFAULT_HEAVY_MODEL,
         "primary_model": DEFAULT_FAST_MODEL,
-        "companion_persona_prompt": next_companion_prompt,
     }
     if not next_config["api_base_url"]:
         next_config["api_base_url"] = DEFAULT_DEEPSEEK_API_BASE_URL
@@ -235,5 +214,4 @@ def save_provider_config(
     settings.remote_fast_model = next_config["fast_model"]
     settings.remote_heavy_model = next_config["heavy_model"]
     settings.remote_primary_model = next_config["primary_model"]
-    settings.companion_persona_prompt = next_config["companion_persona_prompt"]
     return get_provider_config_public()

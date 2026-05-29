@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 from server.config.config import settings
 from server.dialogue.prompts import QUERY_REWRITE_SYSTEM_PROMPT
-from server.infra.repo import list_chunks_emb, list_chunks_emb_multi
+from server.infra.repo import list_chunks_emb, list_chunks_emb_multi, list_chunks_text
 from server.services.ai.embedding import embed_text, rank_chunks
 from server.services.ai.model import smart_model_dispatch
 
@@ -82,6 +82,41 @@ def rewrite_retrieval_query(raw_query: str, messages: List[Dict[str, str]]) -> s
     return query
 
 
+def _lexical_tokens(text: str) -> List[str]:
+    raw = str(text or "").lower()
+    tokens = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", raw)
+    return [token for token in tokens if token.strip()]
+
+
+def _rank_chunks_by_text(query: str, chunks: List[Dict[str, object]], top_k: int) -> List[Dict[str, object]]:
+    tokens = list(dict.fromkeys(_lexical_tokens(query)))
+    if not tokens:
+        return []
+    scored: List[Dict[str, object]] = []
+    query_text = str(query or "").strip().lower()
+    for chunk in chunks:
+        content = str(chunk.get("content") or "")
+        content_lower = content.lower()
+        hits = sum(content_lower.count(token) for token in tokens)
+        if query_text and query_text in content_lower:
+            hits += max(5, len(tokens))
+        if hits <= 0:
+            continue
+        scored.append(
+            {
+                "chunk_id": chunk.get("chunk_id"),
+                "content": content,
+                "score": float(hits),
+                "document_id": chunk.get("document_id"),
+                "document_title": chunk.get("document_title"),
+                "page_no": chunk.get("page_no"),
+                "source_path": chunk.get("source_path"),
+            }
+        )
+    scored.sort(key=lambda x: float(x.get("score") or 0), reverse=True)
+    return scored[:top_k]
+
+
 def retrieve_chunks_for_chat(
     query: str,
     document_id: Optional[int] = None,
@@ -92,12 +127,16 @@ def retrieve_chunks_for_chat(
     if not q:
         return []
 
-    query_vec = embed_text(q)
-    candidates = list_chunks_emb(document_id=document_id, limit=candidate_limit)
-    if not candidates:
-        return []
-    ranked = rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
-    return ranked
+    try:
+        query_vec = embed_text(q)
+        candidates = list_chunks_emb(document_id=document_id, limit=candidate_limit)
+        if candidates:
+            return rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
+    except Exception as exc:
+        logging.warning("embedding retrieval failed; falling back to parsed text: %s", exc)
+
+    parsed_chunks = list_chunks_text(document_id=document_id, limit=candidate_limit)
+    return _rank_chunks_by_text(q, parsed_chunks, top_k=top_k)
 
 
 def retrieve_chunks_multi(
@@ -108,8 +147,14 @@ def retrieve_chunks_multi(
 ) -> List[Dict[str, object]]:
     if not document_ids or not query.strip():
         return []
-    query_vec = embed_text(query.strip())
-    candidates = list_chunks_emb_multi(document_ids=document_ids, limit=candidate_limit)
-    if not candidates:
-        return []
-    return rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
+    q = query.strip()
+    try:
+        query_vec = embed_text(q)
+        candidates = list_chunks_emb_multi(document_ids=document_ids, limit=candidate_limit)
+        if candidates:
+            return rank_chunks(query_vec=query_vec, chunks=candidates, top_k=top_k)
+    except Exception as exc:
+        logging.warning("multi embedding retrieval failed; falling back to parsed text: %s", exc)
+
+    parsed_chunks = list_chunks_text(document_ids=document_ids, limit=candidate_limit)
+    return _rank_chunks_by_text(q, parsed_chunks, top_k=top_k)

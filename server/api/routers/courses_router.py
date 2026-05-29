@@ -4,6 +4,7 @@ from typing import Dict
 from urllib.parse import unquote
 
 from fastapi import APIRouter, HTTPException
+from starlette.responses import FileResponse
 
 from server.infra.repo import (
     create_course,
@@ -285,6 +286,15 @@ def api_read_workspace_file(course_id: int, path: str) -> WorkspaceFileResponse:
         size=stat.st_size,
         modified_at=stat.st_mtime,
     )
+
+
+@router.get("/courses/{course_id}/workspace/file/raw")
+def api_read_workspace_file_raw(course_id: int, path: str):
+    root = _workspace_for_course(course_id)
+    target = _resolve_workspace_file(root, path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(str(target))
 
 
 @router.put("/courses/{course_id}/workspace/file", response_model=WorkspaceFileSaveResponse)
